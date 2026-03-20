@@ -1,0 +1,24 @@
+default_connection = "local-sqlite"
+
+[connections.local-pg]
+engine = "postgres"
+dsn_env = "LOCAL_PG_DSN"
+mode = "Lantern"
+tags = ["dev", "local"]
+
+[connections.analytics-mysql]
+engine = "mysql"
+host = "127.0.0.1"
+port = 3306
+user = "reporter"
+database = "analytics"
+password.cmd = ["printenv", "MYSQL_ANALYTICS_PASSWORD"]
+mode = "Lantern"
+tags = ["staging"]
+
+[connections.local-sqlite]
+engine = "sqlite"
+path = "./data/demo.db"
+mode = "Lantern"
+tags = ["local", "file"]
+
