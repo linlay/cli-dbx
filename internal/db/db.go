@@ -762,14 +762,6 @@ func ExportRows(rows []map[string]any, columns []Column, format string, out *os.
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
-	case "jsonl":
-		enc := json.NewEncoder(out)
-		for _, row := range rows {
-			if err := enc.Encode(row); err != nil {
-				return err
-			}
-		}
-		return nil
 	case "csv":
 		w := csv.NewWriter(out)
 		header := make([]string, 0, len(columns))

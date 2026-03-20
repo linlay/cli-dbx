@@ -37,66 +37,8 @@ type Envelope struct {
 
 func PrintEnvelope(format string, env Envelope) error {
 	switch strings.ToLower(format) {
-	case "agent":
-		payload := map[string]any{
-			"ok":      env.OK,
-			"kind":    env.Kind,
-			"conn":    env.Connection,
-			"summary": env.Summary,
-			"more":    env.More,
-		}
-		if env.StatementClass != "" {
-			payload["class"] = env.StatementClass
-		}
-		if env.Data != nil {
-			payload["data"] = env.Data
-		}
-		if env.Next != "" {
-			payload["next"] = env.Next
-		}
-		if env.Code != "" {
-			payload["code"] = env.Code
-		}
-		if env.Hint != "" {
-			payload["hint"] = env.Hint
-		}
-		if len(env.Warnings) > 0 {
-			payload["warnings"] = env.Warnings
-		}
-		if env.Verbose {
-			if env.Engine != "" {
-				payload["engine"] = env.Engine
-			}
-			if env.Mode != "" {
-				payload["mode"] = env.Mode
-			}
-			if env.RiskLevel != "" {
-				payload["risk_level"] = env.RiskLevel
-			}
-			if env.Meta != nil {
-				payload["meta"] = env.Meta
-			}
-			if env.AuditID != "" {
-				payload["audit_id"] = env.AuditID
-			}
-			if env.Fingerprint != "" {
-				payload["fingerprint"] = env.Fingerprint
-			}
-			if env.RowCount > 0 {
-				payload["row_count"] = env.RowCount
-			}
-			if env.Truncated {
-				payload["truncated"] = env.Truncated
-			}
-		}
-		enc := json.NewEncoder(os.Stdout)
-		return enc.Encode(payload)
-	case "", "json", "llm":
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(env)
-	case "jsonl":
-		return json.NewEncoder(os.Stdout).Encode(env)
+	case "", "json":
+		return json.NewEncoder(os.Stdout).Encode(compactPayload(env))
 	case "table":
 		fmt.Printf("ok: %t\n", env.OK)
 		fmt.Printf("connection: %s (%s)\n", env.Connection, env.Engine)
@@ -121,53 +63,59 @@ func PrintEnvelope(format string, env Envelope) error {
 	}
 }
 
-func SummarizeResult(result db.QueryResult, truncateTokens int) string {
-	parts := []string{fmt.Sprintf("%d rows", result.RowCount)}
-	if result.Truncated {
-		parts = append(parts, "truncated")
+func compactPayload(env Envelope) map[string]any {
+	payload := map[string]any{
+		"ok":      env.OK,
+		"kind":    env.Kind,
+		"conn":    env.Connection,
+		"summary": env.Summary,
+		"more":    env.More,
 	}
-	if len(result.Columns) > 0 {
-		colNames := make([]string, 0, len(result.Columns))
-		for _, col := range result.Columns {
-			colNames = append(colNames, fmt.Sprintf("%s:%s", col.Name, strings.ToLower(col.Type)))
+	if env.StatementClass != "" {
+		payload["class"] = env.StatementClass
+	}
+	if env.Data != nil {
+		payload["data"] = env.Data
+	}
+	if env.Next != "" {
+		payload["next"] = env.Next
+	}
+	if env.Code != "" {
+		payload["code"] = env.Code
+	}
+	if env.Hint != "" {
+		payload["hint"] = env.Hint
+	}
+	if len(env.Warnings) > 0 {
+		payload["warnings"] = env.Warnings
+	}
+	if env.Verbose {
+		if env.Engine != "" {
+			payload["engine"] = env.Engine
 		}
-		parts = append(parts, "columns="+strings.Join(colNames, ", "))
-	}
-	summary := strings.Join(parts, "; ")
-	if truncateTokens > 0 && len(summary) > truncateTokens*4 {
-		summary = summary[:truncateTokens*4] + "..."
-	}
-	return summary
-}
-
-func LLMData(result db.QueryResult, sampleSize int) map[string]any {
-	data := map[string]any{
-		"columns": result.Columns,
-	}
-	rows := result.Rows
-	if sampleSize > 0 && len(rows) > sampleSize {
-		rows = rows[:sampleSize]
-	}
-	data["rows"] = rows
-	if len(result.Stats) > 0 {
-		stats := make([]map[string]any, 0, len(result.Stats))
-		names := make([]string, 0, len(result.Stats))
-		for name := range result.Stats {
-			names = append(names, name)
+		if env.Mode != "" {
+			payload["mode"] = env.Mode
 		}
-		sort.Strings(names)
-		for _, name := range names {
-			stat := result.Stats[name]
-			stats = append(stats, map[string]any{
-				"name":          name,
-				"null_count":    stat.NullCount,
-				"distinct_seen": stat.DistinctSeen,
-				"samples":       stat.Samples,
-			})
+		if env.RiskLevel != "" {
+			payload["risk_level"] = env.RiskLevel
 		}
-		data["column_stats"] = stats
+		if env.Meta != nil {
+			payload["meta"] = env.Meta
+		}
+		if env.AuditID != "" {
+			payload["audit_id"] = env.AuditID
+		}
+		if env.Fingerprint != "" {
+			payload["fingerprint"] = env.Fingerprint
+		}
+		if env.RowCount > 0 {
+			payload["row_count"] = env.RowCount
+		}
+		if env.Truncated {
+			payload["truncated"] = env.Truncated
+		}
 	}
-	return data
+	return payload
 }
 
 func CompactColumns(columns []db.Column) []string {
@@ -186,15 +134,11 @@ func CompactColumns(columns []db.Column) []string {
 	return out
 }
 
-func AgentQueryData(result db.QueryResult, sampleSize int, cursor, nextCursor string) map[string]any {
-	rows := result.Rows
-	if sampleSize > 0 && len(rows) > sampleSize {
-		rows = rows[:sampleSize]
-	}
+func QueryData(result db.QueryResult, cursor, nextCursor string) map[string]any {
 	data := map[string]any{
 		"cols":      CompactColumns(result.Columns),
-		"rows":      rows,
-		"returned":  len(rows),
+		"rows":      result.Rows,
+		"returned":  len(result.Rows),
 		"seen":      result.SeenCount,
 		"truncated": result.Truncated,
 	}
@@ -207,21 +151,18 @@ func AgentQueryData(result db.QueryResult, sampleSize int, cursor, nextCursor st
 	return data
 }
 
-func AgentQuerySummary(result db.QueryResult, sampleSize int, nextCursor string) string {
+func QuerySummary(result db.QueryResult, nextCursor string) string {
 	returned := len(result.Rows)
-	if sampleSize > 0 && returned > sampleSize {
-		returned = sampleSize
-	}
 	switch {
 	case result.SeenCount == 0:
 		return "no rows found; refine the exec only if you expected data"
 	case result.Truncated:
 		if nextCursor != "" {
-			return fmt.Sprintf("%d rows found; returned %d samples; continue with --cursor %s if needed", result.SeenCount, returned, nextCursor)
+			return fmt.Sprintf("%d rows found; returned %d rows; continue with --cursor %s", result.SeenCount, returned, nextCursor)
 		}
-		return fmt.Sprintf("%d rows found; returned %d samples; refine with where/order by if needed", result.SeenCount, returned)
+		return fmt.Sprintf("%d rows found; returned %d rows; refine with where/order by if needed", result.SeenCount, returned)
 	default:
-		return fmt.Sprintf("%d rows found; returned %d samples; inspect or refine if you need more detail", result.SeenCount, returned)
+		return fmt.Sprintf("%d rows found; returned %d rows", result.SeenCount, returned)
 	}
 }
 

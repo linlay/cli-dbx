@@ -11,7 +11,7 @@
 - 会连数据库
 - 会执行 SQL
 - 会拦住明显危险的动作
-- 会把结果整理成适合人类或 LLM 消费的格式
+- 会把结果整理成适合脚本或人类查看的格式
 
 ## 2. 你最需要记住的两个概念
 
@@ -71,13 +71,14 @@ EOF
 建表：
 
 ```bash
-./dbx exec --mode Chisel local-sqlite 'create table users (id integer primary key, name text)'
+./dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
 ```
 
 查询：
 
 ```bash
 ./dbx exec local-sqlite 'select * from users'
+./dbx exec 'select * from users order by id' --page-size 100
 ```
 
 ## 4. 导入一个 CSV
@@ -93,13 +94,20 @@ id,name
 导入：
 
 ```bash
-./dbx import --mode Tweezers file ./users.csv local-sqlite users
+./dbx import file ./users.csv local-sqlite users --mode Tweezers
 ```
 
 再查一下：
 
 ```bash
 ./dbx exec local-sqlite 'select * from users order by id'
+```
+
+如果结果超过默认 `100` 行，输出里会给 `data.next_cursor`。继续读下一页时，保持同一条 SQL：
+
+```bash
+./dbx exec 'select * from users order by id'
+./dbx exec 'select * from users order by id' --cursor 100
 ```
 
 ## 5. 如果你用 PostgreSQL 或 MySQL

@@ -19,7 +19,7 @@ Flow:
   Omit <name> to use the default connection.
 
 Example:
-  dbx exec local-pg 'select * from users limit 5'
+  dbx exec local-pg 'select * from users order by id' --page-size 100
 `
 }
 
@@ -36,9 +36,12 @@ MySQL: import customers.csv
   dbx inspect table local-mysql customers
   dbx import file ./customers.csv local-mysql customers --mode Tweezers
 
+SQLite: continue a paged read
+  dbx exec 'select * from users order by id' --page-size 100
+  dbx exec 'select * from users order by id' --cursor 100
+
 SQLite: export users to csv
-  dbx inspect table local-sqlite users
-  dbx exec local-sqlite 'select * from users order by id desc'
+  dbx inspect table users
   dbx export table users local-sqlite ./users.csv --format csv
 `
 }
@@ -98,10 +101,20 @@ Minimum:
   file <conn> <path.sql>
 
 Facts:
-  Read results are sampled by default.
+  Read results return up to 100 rows by default.
   Multiple statements are blocked by default.
   Use --verbose only when you need more context.
-  Use --cursor <n> to continue a paged read.
+  Keep the same order by when you continue with --cursor.
+
+Options:
+  --mode <name>                 override the connection mode
+  --page-size <n>               read page size; default 100
+  --cursor <n>                  continue from data.next_cursor
+  --format <json|table>         result format; default json
+  --verbose                     include engine, mode, and meta
+  --dry-run                     validate policy without executing
+  --config <path>               read a specific config file
+  --max-rows-affected <n>       write safety limit; default 1000
 
 Modes:
   Lantern   read only; default for selects
@@ -117,8 +130,9 @@ Mode examples:
   --mode Forge      mixed data + schema work
 
 Examples:
-  dbx exec 'select * from users limit 5'
-  dbx exec local-pg 'select * from users limit 5'
+  dbx exec 'select * from users order by id'
+  dbx exec 'select * from users order by id' --cursor 100
+  dbx exec local-pg 'select * from users order by id' --page-size 200
   dbx exec dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select now()'
   dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
 
@@ -146,7 +160,14 @@ func exportHelp() string {
 	return `dbx export
 
 When to use:
-  Write a table to csv, json, or jsonl.
+  Write a table to csv or json.
+
+Options:
+  --format <csv|json>           export file format; default csv
+  --limit <n>                   limit rows written to the file
+  --config <path>               read a specific config file
+  --mode <name>                 override the connection mode
+  --verbose                     include engine, mode, and meta
 
 Example:
   dbx export table users ./users.csv --format csv

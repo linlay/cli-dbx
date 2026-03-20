@@ -18,7 +18,7 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	root := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help"})
 	})
-	if !strings.Contains(root, "dbx exec local-pg 'select * from users limit 5'") {
+	if !strings.Contains(root, "dbx exec local-pg 'select * from users order by id' --page-size 100") {
 		t.Fatalf("root help should point to exec usage, got:\n%s", root)
 	}
 	if strings.Contains(root, "self-describing") || strings.Contains(root, "external docs") {
@@ -28,7 +28,7 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	examples := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help", "examples"})
 	})
-	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") {
+	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") || !strings.Contains(examples, "--cursor 100") {
 		t.Fatalf("help examples should include postgres and mysql examples, got:\n%s", examples)
 	}
 
@@ -38,11 +38,14 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	if !strings.Contains(execHelp, "Run any SQL") || !strings.Contains(execHelp, "Lantern   read only; default for selects") {
 		t.Fatalf("exec help should include compact mode guidance, got:\n%s", execHelp)
 	}
-	if !strings.Contains(execHelp, "Multiple statements are blocked by default.") || !strings.Contains(execHelp, "Use --cursor <n> to continue a paged read.") {
-		t.Fatalf("exec help should include default safety and cursor guidance, got:\n%s", execHelp)
+	if !strings.Contains(execHelp, "--page-size <n>               read page size; default 100") || !strings.Contains(execHelp, "--format <json|table>         result format; default json") {
+		t.Fatalf("exec help should list retained params and defaults, got:\n%s", execHelp)
 	}
-	if strings.Contains(execHelp, "--require-ack") || strings.Contains(execHelp, "--verbose-errors") {
-		t.Fatalf("exec help should not mention removed flags, got:\n%s", execHelp)
+	if !strings.Contains(execHelp, "Keep the same order by when you continue with --cursor.") || !strings.Contains(execHelp, "dbx exec 'select * from users order by id' --cursor 100") {
+		t.Fatalf("exec help should include pagination guidance, got:\n%s", execHelp)
+	}
+	if strings.Contains(execHelp, "--require-ack") || strings.Contains(execHelp, "--verbose-errors") || strings.Contains(execHelp, "sampled by default") {
+		t.Fatalf("exec help should not mention removed flags or sampling, got:\n%s", execHelp)
 	}
 	if strings.Contains(execHelp, "Common next actions") || strings.Contains(execHelp, "agent-first") {
 		t.Fatalf("exec help should omit design sections, got:\n%s", execHelp)
@@ -63,8 +66,8 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	}
 }
 
-func TestExecDefaultAgentOutput(t *testing.T) {
-	configPath := makeSQLiteFixture(t, 25)
+func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
+	configPath := makeSQLiteFixture(t, 125)
 	out := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "select id, name from users order by id"})
 	})
@@ -80,7 +83,7 @@ func TestExecDefaultAgentOutput(t *testing.T) {
 		t.Fatalf("more = %v, want true", got)
 	}
 	if _, ok := payload["engine"]; ok {
-		t.Fatalf("default agent output should omit engine: %v", payload)
+		t.Fatalf("default json output should omit engine: %v", payload)
 	}
 
 	data, ok := payload["data"].(map[string]any)
@@ -88,14 +91,14 @@ func TestExecDefaultAgentOutput(t *testing.T) {
 		t.Fatalf("data should be an object: %#v", payload["data"])
 	}
 	rows, ok := data["rows"].([]any)
-	if !ok || len(rows) != 5 {
-		t.Fatalf("rows should contain 5 samples, got %#v", data["rows"])
+	if !ok || len(rows) != 100 {
+		t.Fatalf("rows should contain the full page, got %#v", data["rows"])
 	}
-	if got := int(data["seen"].(float64)); got != 25 {
-		t.Fatalf("seen = %d, want 25", got)
+	if got := int(data["seen"].(float64)); got != 125 {
+		t.Fatalf("seen = %d, want 125", got)
 	}
-	if nextCursor := data["next_cursor"]; nextCursor != "20" {
-		t.Fatalf("next_cursor = %v, want 20", nextCursor)
+	if nextCursor := data["next_cursor"]; nextCursor != "100" {
+		t.Fatalf("next_cursor = %v, want 100", nextCursor)
 	}
 }
 
@@ -211,11 +214,10 @@ func TestExecBlocksMultiStatementButAllowsScopedWriteWithoutAck(t *testing.T) {
 
 func TestSQLErrorIncludesDriverReasonByDefault(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 1)
-	cwd, err := os.Getwd()
-	if err != nil {
+	csvPath := filepath.Join(t.TempDir(), "dupe.csv")
+	if err := os.WriteFile(csvPath, []byte("id,name\n1,Ada\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	csvPath := filepath.Join(filepath.Dir(filepath.Dir(cwd)), "users.csv")
 	out := captureStdout(t, func() error {
 		err := New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "local-sqlite", "users"})
 		var exitErr *ExitError
@@ -231,7 +233,8 @@ func TestSQLErrorIncludesDriverReasonByDefault(t *testing.T) {
 	if payload["code"] != "sql_error" {
 		t.Fatalf("expected sql_error, got %#v", payload)
 	}
-	if _, ok := payload["warnings"]; !ok {
+	warnings, ok := payload["warnings"].([]any)
+	if !ok || len(warnings) == 0 || !strings.Contains(warnings[0].(string), "UNIQUE constraint failed") {
 		t.Fatalf("expected raw driver reason by default, got %#v", payload)
 	}
 }
@@ -259,7 +262,7 @@ func TestExecCursorAndInspectRelations(t *testing.T) {
 	configPath := makeSQLiteRelationFixture(t)
 
 	pageOut := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--cursor", "20", "local-sqlite", "select id, name from users order by id"})
+		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--cursor", "20", "--page-size", "5", "local-sqlite", "select id, name from users order by id"})
 	})
 	var pagePayload map[string]any
 	if err := json.Unmarshal([]byte(pageOut), &pagePayload); err != nil {
@@ -269,6 +272,10 @@ func TestExecCursorAndInspectRelations(t *testing.T) {
 	rows := data["rows"].([]any)
 	if len(rows) != 5 {
 		t.Fatalf("expected 5 rows from cursor page, got %d", len(rows))
+	}
+	first := rows[0].(map[string]any)
+	if first["id"].(float64) != 21 {
+		t.Fatalf("expected cursor page to continue at id 21, got %#v", first)
 	}
 
 	tableOut := captureStdout(t, func() error {
@@ -312,6 +319,24 @@ func TestExportUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
 	}
 	if payload["conn"] != "local-sqlite" || payload["kind"] != "export_result" {
 		t.Fatalf("expected default-conn export result, got %#v", payload)
+	}
+}
+
+func TestRemovedFormatsAreRejected(t *testing.T) {
+	configPath := makeSQLiteFixture(t, 2)
+	err := New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "agent", "local-sqlite", "select id from users order by id"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported output format "agent"`) {
+		t.Fatalf("agent format should be removed, got: %v", err)
+	}
+
+	err = New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "llm", "local-sqlite", "select id from users order by id"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported output format "llm"`) {
+		t.Fatalf("llm format should be removed, got: %v", err)
+	}
+
+	err = New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "jsonl", "local-sqlite", "select id from users order by id"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported output format "jsonl"`) {
+		t.Fatalf("jsonl format should be removed, got: %v", err)
 	}
 }
 

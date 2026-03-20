@@ -65,7 +65,6 @@ type commonFlags struct {
 	mode       string
 	format     string
 	dryRun     bool
-	tx         bool
 	pageSize   int
 	maxRows    int
 	cursor     string
@@ -82,10 +81,9 @@ func (a *App) bindCommon(fs *flag.FlagSet) *commonFlags {
 	c := &commonFlags{}
 	fs.StringVar(&c.configPath, "config", "", "config path")
 	fs.StringVar(&c.mode, "mode", "", "execution mode")
-	fs.StringVar(&c.format, "format", "agent", "output format: agent|table|json|jsonl|llm")
+	fs.StringVar(&c.format, "format", "json", "output format: json|table")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "validate without executing")
-	fs.BoolVar(&c.tx, "tx", false, "transaction hint for future compatibility")
-	fs.IntVar(&c.pageSize, "page-size", 20, "maximum rows to materialize for read results")
+	fs.IntVar(&c.pageSize, "page-size", 100, "maximum rows to materialize for read results")
 	fs.IntVar(&c.maxRows, "max-rows-affected", 1000, "maximum rows affected by write operations")
 	fs.StringVar(&c.cursor, "cursor", "", "continuation cursor for paged reads")
 	fs.BoolVar(&c.verbose, "verbose", false, "include extra metadata in output")
@@ -95,7 +93,7 @@ func (a *App) bindCommon(fs *flag.FlagSet) *commonFlags {
 func bindConnFlags(fs *flag.FlagSet) *connFlags {
 	c := &connFlags{}
 	fs.StringVar(&c.configPath, "config", "", "config path")
-	fs.StringVar(&c.format, "format", "agent", "output format: agent|json|jsonl|table")
+	fs.StringVar(&c.format, "format", "json", "output format: json|table")
 	fs.BoolVar(&c.verbose, "verbose", false, "include extra metadata in output")
 	return c
 }
@@ -136,8 +134,6 @@ func commonValueFlags() map[string]bool {
 		"--page-size":         true,
 		"--max-rows-affected": true,
 		"--cursor":            true,
-		"--sample":            true,
-		"--truncate-tokens":   true,
 		"--limit":             true,
 	}
 }
@@ -339,8 +335,6 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	fs := newFlagSet("exec")
 	fs.Usage = func() {}
 	common := a.bindCommon(fs)
-	sampleSize := fs.Int("sample", 5, "sample size for agent output")
-	truncateTokens := fs.Int("truncate-tokens", 256, "soft token budget for summaries")
 	if err := fs.Parse(normalizeFlagArgs(args, commonValueFlags())); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("exec")
@@ -398,17 +392,9 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, class, err)
 		}
-		data := any(result.Rows)
-		summary := output.SummarizeResult(result, *truncateTokens)
 		more := result.Truncated
 		next := nextForClass(class, more)
 		nextCursorValue := nextCursor(cursorOffset, common.pageSize, result)
-		if strings.EqualFold(common.format, "llm") {
-			data = output.LLMData(result, *sampleSize)
-		} else if strings.EqualFold(common.format, "agent") {
-			data = output.AgentQueryData(result, *sampleSize, common.cursor, nextCursorValue)
-			summary = output.AgentQuerySummary(result, *sampleSize, nextCursorValue)
-		}
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
 			Kind:           "exec_result",
@@ -420,8 +406,8 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 			RowCount:       result.RowCount,
 			Truncated:      result.Truncated,
 			More:           more,
-			Summary:        summary,
-			Data:           data,
+			Summary:        output.QuerySummary(result, nextCursorValue),
+			Data:           output.QueryData(result, common.cursor, nextCursorValue),
 			Next:           next,
 			AuditID:        auditID,
 			Fingerprint:    audit.Fingerprint(text),
@@ -511,17 +497,6 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, "", err)
 		}
-		data := any(info)
-		if strings.EqualFold(common.format, "agent") {
-			data = map[string]any{
-				"schema":       info.Schema,
-				"name":         info.Name,
-				"cols":         info.Columns,
-				"primary_key":  info.PrimaryKey,
-				"unique_keys":  info.UniqueKeys,
-				"foreign_keys": info.ForeignKeys,
-			}
-		}
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_table",
@@ -529,11 +504,18 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Summary:    fmt.Sprintf("table %s.%s has %d columns; run exec next if needed", info.Schema, info.Name, len(info.Columns)),
-			Data:       data,
-			Next:       "exec",
-			AuditID:    audit.ID("inspect-table:" + spec.Name + ":" + table),
-			Meta:       output.ConnectionMeta(spec),
-			Verbose:    common.verbose,
+			Data: map[string]any{
+				"schema":       info.Schema,
+				"name":         info.Name,
+				"cols":         info.Columns,
+				"primary_key":  info.PrimaryKey,
+				"unique_keys":  info.UniqueKeys,
+				"foreign_keys": info.ForeignKeys,
+			},
+			Next:    "exec",
+			AuditID: audit.ID("inspect-table:" + spec.Name + ":" + table),
+			Meta:    output.ConnectionMeta(spec),
+			Verbose: common.verbose,
 		})
 	case "connection":
 		return output.PrintEnvelope(common.format, output.Envelope{
@@ -559,9 +541,17 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 		return printHelp("export")
 	}
 	fs := newFlagSet("export")
-	common := a.bindCommon(fs)
+	configPath := fs.String("config", "", "config path")
+	selectedMode := fs.String("mode", "", "execution mode")
+	fileFormat := fs.String("format", "csv", "export file format: csv|json")
+	verbose := fs.Bool("verbose", false, "include extra metadata in output")
 	limit := fs.Int("limit", 0, "optional row limit for export")
-	if err := fs.Parse(normalizeFlagArgs(args, commonValueFlags())); err != nil {
+	if err := fs.Parse(normalizeFlagArgs(args, map[string]bool{
+		"--config": true,
+		"--mode":   true,
+		"--format": true,
+		"--limit":  true,
+	})); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("export")
 		}
@@ -569,26 +559,26 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	}
 	table, connName, outPath, err := parseExportInput(fs.Args())
 	if err != nil {
-		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
+		return a.renderError("json", *verbose, conn.Spec{}, "", err)
 	}
-	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	_, spec, err := a.resolveSpec(ctx, *configPath, connName, "", "", *selectedMode)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
+		return a.renderError("json", *verbose, conn.Spec{Name: connName}, "", err)
 	}
 	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
 	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, spec, mode.ClassRead, err)
+		return a.renderError("json", *verbose, spec, mode.ClassRead, err)
 	}
 	file, err := os.Create(outPath)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, spec, "", err)
+		return a.renderError("json", *verbose, spec, "", err)
 	}
 	defer file.Close()
-	if err := db.ExportRows(result.Rows, result.Columns, common.format, file); err != nil {
-		return a.renderError(common.format, common.verbose, spec, "", err)
+	if err := db.ExportRows(result.Rows, result.Columns, *fileFormat, file); err != nil {
+		return a.renderError("json", *verbose, spec, "", err)
 	}
-	return output.PrintEnvelope("agent", output.Envelope{
+	return output.PrintEnvelope("json", output.Envelope{
 		OK:         true,
 		Kind:       "export_result",
 		Mode:       string(spec.Mode),
@@ -598,12 +588,12 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 		Summary:    fmt.Sprintf("exported %d row(s) from %s; inspect the output file if needed", result.RowCount, table),
 		Data: map[string]any{
 			"out":    outPath,
-			"format": common.format,
+			"format": *fileFormat,
 		},
 		Next:    "exec",
 		AuditID: audit.ID("export:" + spec.Name + ":" + table),
 		Meta:    output.ConnectionMeta(spec),
-		Verbose: common.verbose,
+		Verbose: *verbose,
 	})
 }
 

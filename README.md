@@ -18,7 +18,8 @@
 - `export`：导出表数据
 - `import`：导入 CSV / JSON
 - 模式系统：`Lantern`、`Tweezers`、`Chisel`、`Forge`、`Crown`、`Wildfire`
-- 输出格式：`table`、`json`、`jsonl`、`llm`
+- CLI 输出格式：`json`、`table`
+- 导出文件格式：`csv`、`json`
 
 ## 2. 先编译
 
@@ -82,7 +83,7 @@ tags = ["local"]
 `Lantern` 是只读模式，不能改表，所以这里要切到 `Chisel`：
 
 ```bash
-./dbx exec --mode Chisel local-sqlite 'create table users (id integer primary key, name text)'
+./dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
 ```
 
 ### 第五步：导入 CSV
@@ -98,14 +99,15 @@ id,name
 再导入：
 
 ```bash
-./dbx import --mode Tweezers file users.csv local-sqlite users
+./dbx import file users.csv local-sqlite users --mode Tweezers
 ```
 
 ### 第六步：执行 SQL
 
 ```bash
 ./dbx exec local-sqlite 'select * from users order by id'
-./dbx exec local-sqlite 'select * from users order by id' --format llm
+./dbx exec local-sqlite 'select * from users order by id' --format table
+./dbx exec 'select * from users order by id' --page-size 100
 ./dbx inspect table local-sqlite users
 ```
 
@@ -114,7 +116,7 @@ id,name
 `export` 会把真正的数据写到文件里，所以必须显式提供输出文件路径：
 
 ```bash
-./dbx export --format csv table users local-sqlite users-export.csv
+./dbx export table users local-sqlite users-export.csv --format csv
 ```
 
 ## 4. 配置文件怎么写
@@ -278,39 +280,59 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 ### 导入 CSV
 
 ```bash
-./dbx import --mode Tweezers file ./users.csv local-sqlite users
+./dbx import file ./users.csv local-sqlite users --mode Tweezers
 ```
 
 ### 导出 CSV
 
 ```bash
-./dbx export --format csv table users local-sqlite ./users.csv
+./dbx export table users local-sqlite ./users.csv --format csv
 ```
 
-## 8. 输出格式怎么选
+## 8. 结果格式和分页
 
+CLI 结果只保留两种格式：
+
+- `json`：默认格式，给脚本和智能体消费
 - `table`：给人快速看
-- `json`：最通用
-- `jsonl`：一行一个 JSON，适合流处理
-- `llm`：适合智能体和大模型消费
 
 例如：
 
 ```bash
-./dbx exec local-sqlite 'select * from users' --format table
 ./dbx exec local-sqlite 'select * from users' --format json
-./dbx exec local-sqlite 'select * from users' --format llm
+./dbx exec local-sqlite 'select * from users' --format table
 ```
 
-`llm` 输出会尽量保留：
+读查询默认最多返回 `100` 行。
 
-- 列信息
-- 结果摘要
-- 样本值
-- 风险等级
-- 审计 ID
+如果结果还有更多，输出里会带：
 
-## 9. 环境变量支持
+- `more: true`
+- `data.next_cursor`
+
+继续读取下一页时，把同一条 SQL 和返回的 `next_cursor` 一起传回去：
+
+```bash
+./dbx exec 'select * from users order by id'
+./dbx exec 'select * from users order by id' --cursor 100
+./dbx exec 'select * from users order by id' --cursor 100 --page-size 200
+```
+
+分页时要保持相同的 `order by`，这样每一页的顺序才稳定。
+
+## 9. 导出文件格式
+
+- `csv`：默认导出格式
+- `json`：结构化导出格式
+
+例如：
+
+```bash
+./dbx export table users ./users.csv --format csv
+./dbx export table users ./users.json --format json
+```
+
+## 10. 环境变量支持
 
 除了配置文件，也支持环境变量：
 
@@ -327,10 +349,10 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 例如：
 
 ```bash
-DBX_CONN=local-sqlite ./dbx exec local-sqlite 'select 1'
+DBX_CONN=local-sqlite ./dbx exec 'select 1'
 ```
 
-## 10. 新手常见问题
+## 11. 新手常见问题
 
 ### 为什么提示 mode 不允许？
 
@@ -354,7 +376,7 @@ DBX_CONN=local-sqlite ./dbx exec local-sqlite 'select 1'
 - `password.cmd` 是否写成了数组
 - 文件路径是否正确
 
-## 11. 进一步阅读
+## 12. 进一步阅读
 
 - [Beginner Guide](/Users/linlay/Server/zenmind/docs/beginner-guide.md)
 - [config.example.toml](/Users/linlay/Server/zenmind/testdata/config.example.toml)
