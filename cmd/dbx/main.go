@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -16,6 +17,10 @@ func main() {
 
 	app := cli.New()
 	if err := app.Run(ctx, os.Args[1:]); err != nil {
+		var exitErr *cli.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		fmt.Fprintln(os.Stderr, "dbx:", err)
 		os.Exit(1)
 	}

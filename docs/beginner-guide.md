@@ -27,7 +27,7 @@
 这样你以后执行命令只要写：
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select 1'
+./dbx exec --conn local-sqlite --sql 'select 1'
 ```
 
 ### mode
@@ -71,7 +71,7 @@ EOF
 建表：
 
 ```bash
-./dbx query \
+./dbx exec \
   --conn local-sqlite \
   --mode Chisel \
   --require-ack \
@@ -81,7 +81,7 @@ EOF
 查询：
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select * from users'
+./dbx exec --conn local-sqlite --sql 'select * from users'
 ```
 
 ## 4. 导入一个 CSV
@@ -106,7 +106,7 @@ id,name
 再查一下：
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select * from users order by id'
+./dbx exec --conn local-sqlite --sql 'select * from users order by id'
 ```
 
 ## 5. 如果你用 PostgreSQL 或 MySQL
@@ -176,7 +176,7 @@ export MYSQL_PASSWORD='secret'
 
 1. 先用 SQLite 跑通
 2. 学会 `conn test`
-3. 学会 `query` 和 `inspect`
+3. 学会 `exec` 和 `inspect`
 4. 再开始用 `import` 和 `export`
 5. 最后再碰高权限 mode
 

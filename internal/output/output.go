@@ -14,6 +14,11 @@ import (
 
 type Envelope struct {
 	OK             bool                `json:"ok"`
+	Kind           string              `json:"kind,omitempty"`
+	Code           string              `json:"code,omitempty"`
+	Hint           string              `json:"hint,omitempty"`
+	Next           string              `json:"next,omitempty"`
+	More           bool                `json:"more,omitempty"`
 	Mode           string              `json:"mode"`
 	Engine         string              `json:"engine"`
 	Connection     string              `json:"connection"`
@@ -27,10 +32,65 @@ type Envelope struct {
 	AuditID        string              `json:"audit_id"`
 	Fingerprint    string              `json:"fingerprint,omitempty"`
 	Meta           map[string]any      `json:"meta,omitempty"`
+	Verbose        bool                `json:"-"`
 }
 
 func PrintEnvelope(format string, env Envelope) error {
 	switch strings.ToLower(format) {
+	case "agent":
+		payload := map[string]any{
+			"ok":      env.OK,
+			"kind":    env.Kind,
+			"conn":    env.Connection,
+			"summary": env.Summary,
+			"more":    env.More,
+		}
+		if env.StatementClass != "" {
+			payload["class"] = env.StatementClass
+		}
+		if env.Data != nil {
+			payload["data"] = env.Data
+		}
+		if env.Next != "" {
+			payload["next"] = env.Next
+		}
+		if env.Code != "" {
+			payload["code"] = env.Code
+		}
+		if env.Hint != "" {
+			payload["hint"] = env.Hint
+		}
+		if len(env.Warnings) > 0 {
+			payload["warnings"] = env.Warnings
+		}
+		if env.Verbose {
+			if env.Engine != "" {
+				payload["engine"] = env.Engine
+			}
+			if env.Mode != "" {
+				payload["mode"] = env.Mode
+			}
+			if env.RiskLevel != "" {
+				payload["risk_level"] = env.RiskLevel
+			}
+			if env.Meta != nil {
+				payload["meta"] = env.Meta
+			}
+			if env.AuditID != "" {
+				payload["audit_id"] = env.AuditID
+			}
+			if env.Fingerprint != "" {
+				payload["fingerprint"] = env.Fingerprint
+			}
+			if env.RowCount > 0 {
+				payload["row_count"] = env.RowCount
+			}
+			if env.Truncated {
+				payload["truncated"] = env.Truncated
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		return enc.Encode(payload)
 	case "", "json", "llm":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -108,6 +168,51 @@ func LLMData(result db.QueryResult, sampleSize int) map[string]any {
 		data["column_stats"] = stats
 	}
 	return data
+}
+
+func CompactColumns(columns []db.Column) []string {
+	out := make([]string, 0, len(columns))
+	for _, col := range columns {
+		suffix := "?"
+		if !col.Nullable {
+			suffix = "!"
+		}
+		colType := strings.ToLower(col.Type)
+		if colType == "" {
+			colType = "unknown"
+		}
+		out = append(out, fmt.Sprintf("%s:%s%s", col.Name, colType, suffix))
+	}
+	return out
+}
+
+func AgentQueryData(result db.QueryResult, sampleSize int) map[string]any {
+	rows := result.Rows
+	if sampleSize > 0 && len(rows) > sampleSize {
+		rows = rows[:sampleSize]
+	}
+	return map[string]any{
+		"cols":      CompactColumns(result.Columns),
+		"rows":      rows,
+		"returned":  len(rows),
+		"seen":      result.SeenCount,
+		"truncated": result.Truncated,
+	}
+}
+
+func AgentQuerySummary(result db.QueryResult, sampleSize int) string {
+	returned := len(result.Rows)
+	if sampleSize > 0 && returned > sampleSize {
+		returned = sampleSize
+	}
+	switch {
+	case result.SeenCount == 0:
+		return "no rows found; refine the query only if you expected data"
+	case result.Truncated:
+		return fmt.Sprintf("%d rows found; returned %d samples; refine with where/order by if needed", result.SeenCount, returned)
+	default:
+		return fmt.Sprintf("%d rows found; returned %d samples; inspect or refine if you need more detail", result.SeenCount, returned)
+	}
 }
 
 func ConnectionMeta(spec conn.Spec) map[string]any {

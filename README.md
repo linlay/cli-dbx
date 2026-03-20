@@ -14,7 +14,7 @@
 
 - `conn`：查看、解析、测试连接
 - `inspect`：查看 schema、表结构、连接信息
-- `query`：执行 SQL
+- `exec`：执行 SQL
 - `export`：导出表数据
 - `import`：导入 CSV / JSON
 - 模式系统：`Lantern`、`Tweezers`、`Chisel`、`Forge`、`Crown`、`Wildfire`
@@ -82,7 +82,7 @@ tags = ["local"]
 `Lantern` 是只读模式，不能改表，所以这里要切到 `Chisel`：
 
 ```bash
-./dbx query \
+./dbx exec \
   --conn local-sqlite \
   --mode Chisel \
   --require-ack \
@@ -108,11 +108,11 @@ id,name
   --mode Tweezers
 ```
 
-### 第六步：查询
+### 第六步：执行 SQL
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select * from users order by id'
-./dbx query --conn local-sqlite --sql 'select * from users order by id' --format llm
+./dbx exec --conn local-sqlite --sql 'select * from users order by id'
+./dbx exec --conn local-sqlite --sql 'select * from users order by id' --format llm
 ./dbx inspect table --conn local-sqlite users
 ```
 
@@ -265,16 +265,16 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 ./dbx conn test local-sqlite
 ```
 
-### 执行 SQL
+### 执行 SQL（exec）
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select * from users'
+./dbx exec --conn local-sqlite --sql 'select * from users'
 ```
 
 也可以从文件读 SQL：
 
 ```bash
-./dbx query --conn local-sqlite --file ./query.sql
+./dbx exec --conn local-sqlite --file ./query.sql
 ```
 
 ### 查看表结构
@@ -311,9 +311,9 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 例如：
 
 ```bash
-./dbx query --conn local-sqlite --sql 'select * from users' --format table
-./dbx query --conn local-sqlite --sql 'select * from users' --format json
-./dbx query --conn local-sqlite --sql 'select * from users' --format llm
+./dbx exec --conn local-sqlite --sql 'select * from users' --format table
+./dbx exec --conn local-sqlite --sql 'select * from users' --format json
+./dbx exec --conn local-sqlite --sql 'select * from users' --format llm
 ```
 
 `llm` 输出会尽量保留：
@@ -341,7 +341,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 例如：
 
 ```bash
-DBX_CONN=local-sqlite ./dbx query --sql 'select 1'
+DBX_CONN=local-sqlite ./dbx exec --sql 'select 1'
 ```
 
 ## 10. 新手常见问题
@@ -373,4 +373,3 @@ DBX_CONN=local-sqlite ./dbx query --sql 'select 1'
 - [Beginner Guide](/Users/linlay/Server/zenmind/docs/beginner-guide.md)
 - [config.example.toml](/Users/linlay/Server/zenmind/testdata/config.example.toml)
 - [config.sqlite.toml](/Users/linlay/Server/zenmind/testdata/config.sqlite.toml)
-

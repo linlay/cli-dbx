@@ -26,6 +26,7 @@ type QueryResult struct {
 	Columns       []Column               `json:"columns"`
 	Rows          []map[string]any       `json:"rows"`
 	RowCount      int                    `json:"row_count"`
+	SeenCount     int                    `json:"seen_count"`
 	Complete      bool                   `json:"complete"`
 	Sampled       bool                   `json:"sampled"`
 	Truncated     bool                   `json:"truncated"`
@@ -105,6 +106,7 @@ func Query(ctx context.Context, spec conn.Spec, sqlText string, limit int) (Quer
 	}
 
 	for rows.Next() {
+		result.SeenCount++
 		dest := make([]any, len(columns))
 		scan := make([]any, len(columns))
 		for i := range dest {
