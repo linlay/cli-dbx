@@ -27,7 +27,7 @@
 这样你以后执行命令只要写：
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select 1'
+./dbx exec local-sqlite 'select 1'
 ```
 
 ### mode
@@ -71,17 +71,13 @@ EOF
 建表：
 
 ```bash
-./dbx exec \
-  --conn local-sqlite \
-  --mode Chisel \
-  --require-ack \
-  --sql 'create table users (id integer primary key, name text)'
+./dbx exec --mode Chisel local-sqlite 'create table users (id integer primary key, name text)'
 ```
 
 查询：
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select * from users'
+./dbx exec local-sqlite 'select * from users'
 ```
 
 ## 4. 导入一个 CSV
@@ -97,16 +93,13 @@ id,name
 导入：
 
 ```bash
-./dbx import file ./users.csv \
-  --conn local-sqlite \
-  --into users \
-  --mode Tweezers
+./dbx import --mode Tweezers file ./users.csv local-sqlite users
 ```
 
 再查一下：
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select * from users order by id'
+./dbx exec local-sqlite 'select * from users order by id'
 ```
 
 ## 5. 如果你用 PostgreSQL 或 MySQL
@@ -151,7 +144,7 @@ export MYSQL_PASSWORD='secret'
 确认：
 
 - 配置文件是不是 `~/.dbx/config.toml`
-- `[connections.xxx]` 名字和 `--conn xxx` 是否一致
+- `[connections.xxx]` 名字和你传入的连接名是否一致
 
 ### 模式不允许
 
@@ -179,4 +172,3 @@ export MYSQL_PASSWORD='secret'
 3. 学会 `exec` 和 `inspect`
 4. 再开始用 `import` 和 `export`
 5. 最后再碰高权限 mode
-

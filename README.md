@@ -82,11 +82,7 @@ tags = ["local"]
 `Lantern` 是只读模式，不能改表，所以这里要切到 `Chisel`：
 
 ```bash
-./dbx exec \
-  --conn local-sqlite \
-  --mode Chisel \
-  --require-ack \
-  --sql 'create table users (id integer primary key, name text)'
+./dbx exec --mode Chisel local-sqlite 'create table users (id integer primary key, name text)'
 ```
 
 ### 第五步：导入 CSV
@@ -102,29 +98,23 @@ id,name
 再导入：
 
 ```bash
-./dbx import file users.csv \
-  --conn local-sqlite \
-  --into users \
-  --mode Tweezers
+./dbx import --mode Tweezers file users.csv local-sqlite users
 ```
 
 ### 第六步：执行 SQL
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select * from users order by id'
-./dbx exec --conn local-sqlite --sql 'select * from users order by id' --format llm
-./dbx inspect table --conn local-sqlite users
+./dbx exec local-sqlite 'select * from users order by id'
+./dbx exec local-sqlite 'select * from users order by id' --format llm
+./dbx inspect table local-sqlite users
 ```
 
 ### 第七步：导出
 
-`export` 会把真正的数据写到文件里，所以必须带 `--out`：
+`export` 会把真正的数据写到文件里，所以必须显式提供输出文件路径：
 
 ```bash
-./dbx export table users \
-  --conn local-sqlite \
-  --format csv \
-  --out users-export.csv
+./dbx export --format csv table users local-sqlite users-export.csv
 ```
 
 ## 4. 配置文件怎么写
@@ -238,11 +228,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 - 导入数据：`Tweezers`
 - 建表改字段：`Chisel`
 
-如果是高风险动作，通常要显式带上：
-
-```bash
---require-ack
-```
+高风险动作要通过更高的 `mode` 来表达意图，比如建表用 `Chisel`。
 
 ## 7. 最常用命令
 
@@ -268,37 +254,37 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 ### 执行 SQL（exec）
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select * from users'
+./dbx exec local-sqlite 'select * from users'
 ```
 
 也可以从文件读 SQL：
 
 ```bash
-./dbx exec --conn local-sqlite --file ./query.sql
+./dbx exec file local-sqlite ./query.sql
 ```
 
 ### 查看表结构
 
 ```bash
-./dbx inspect table --conn local-sqlite users
+./dbx inspect table local-sqlite users
 ```
 
 ### 查看 schema 和表列表
 
 ```bash
-./dbx inspect schema --conn local-sqlite
+./dbx inspect schema local-sqlite
 ```
 
 ### 导入 CSV
 
 ```bash
-./dbx import file ./users.csv --conn local-sqlite --into users --mode Tweezers
+./dbx import --mode Tweezers file ./users.csv local-sqlite users
 ```
 
 ### 导出 CSV
 
 ```bash
-./dbx export table users --conn local-sqlite --format csv --out ./users.csv
+./dbx export --format csv table users local-sqlite ./users.csv
 ```
 
 ## 8. 输出格式怎么选
@@ -311,9 +297,9 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 例如：
 
 ```bash
-./dbx exec --conn local-sqlite --sql 'select * from users' --format table
-./dbx exec --conn local-sqlite --sql 'select * from users' --format json
-./dbx exec --conn local-sqlite --sql 'select * from users' --format llm
+./dbx exec local-sqlite 'select * from users' --format table
+./dbx exec local-sqlite 'select * from users' --format json
+./dbx exec local-sqlite 'select * from users' --format llm
 ```
 
 `llm` 输出会尽量保留：
@@ -341,7 +327,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 例如：
 
 ```bash
-DBX_CONN=local-sqlite ./dbx exec --sql 'select 1'
+DBX_CONN=local-sqlite ./dbx exec local-sqlite 'select 1'
 ```
 
 ## 10. 新手常见问题
@@ -351,7 +337,7 @@ DBX_CONN=local-sqlite ./dbx exec --sql 'select 1'
 因为默认模式通常是 `Lantern`，它只能读，不能写。  
 如果你在建表、导入、更新数据，需要显式切到更高模式。
 
-### 为什么导出一定要 `--out`？
+### 为什么导出一定要提供输出文件路径？
 
 因为 `dbx` 会同时输出审计 envelope。  
 如果导出内容也直接打到标准输出，二者会混在一起，不方便后续处理。

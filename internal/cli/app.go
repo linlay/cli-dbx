@@ -61,45 +61,34 @@ func (a *App) Run(ctx context.Context, args []string) error {
 }
 
 type commonFlags struct {
-	configPath    string
-	connName      string
-	dsn           string
-	engine        string
-	mode          string
-	format        string
-	dryRun        bool
-	requireAck    bool
-	tx            bool
-	pageSize      int
-	maxRows       int
-	cursor        string
-	verbose       bool
-	verboseErrors bool
+	configPath string
+	mode       string
+	format     string
+	dryRun     bool
+	tx         bool
+	pageSize   int
+	maxRows    int
+	cursor     string
+	verbose    bool
 }
 
 type connFlags struct {
-	configPath    string
-	format        string
-	verbose       bool
-	verboseErrors bool
+	configPath string
+	format     string
+	verbose    bool
 }
 
 func (a *App) bindCommon(fs *flag.FlagSet) *commonFlags {
 	c := &commonFlags{}
 	fs.StringVar(&c.configPath, "config", "", "config path")
-	fs.StringVar(&c.connName, "conn", "", "connection profile name")
-	fs.StringVar(&c.dsn, "dsn", "", "adhoc DSN")
-	fs.StringVar(&c.engine, "engine", "", "database engine")
 	fs.StringVar(&c.mode, "mode", "", "execution mode")
 	fs.StringVar(&c.format, "format", "agent", "output format: agent|table|json|jsonl|llm")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "validate without executing")
-	fs.BoolVar(&c.requireAck, "require-ack", false, "explicitly confirm risky writes")
 	fs.BoolVar(&c.tx, "tx", false, "transaction hint for future compatibility")
 	fs.IntVar(&c.pageSize, "page-size", 20, "maximum rows to materialize for read results")
 	fs.IntVar(&c.maxRows, "max-rows-affected", 1000, "maximum rows affected by write operations")
 	fs.StringVar(&c.cursor, "cursor", "", "continuation cursor for paged reads")
 	fs.BoolVar(&c.verbose, "verbose", false, "include extra metadata in output")
-	fs.BoolVar(&c.verboseErrors, "verbose-errors", false, "include raw driver errors in business error output")
 	return c
 }
 
@@ -108,7 +97,6 @@ func bindConnFlags(fs *flag.FlagSet) *connFlags {
 	fs.StringVar(&c.configPath, "config", "", "config path")
 	fs.StringVar(&c.format, "format", "agent", "output format: agent|json|jsonl|table")
 	fs.BoolVar(&c.verbose, "verbose", false, "include extra metadata in output")
-	fs.BoolVar(&c.verboseErrors, "verbose-errors", false, "include raw driver errors in business error output")
 	return c
 }
 
@@ -118,23 +106,142 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-func (a *App) resolveSpec(ctx context.Context, common *commonFlags) (*config.Config, conn.Spec, error) {
-	cfg, _, err := config.Load(common.configPath)
+func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		if strings.Contains(arg, "=") {
+			flags = append(flags, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		if valueFlags[arg] && i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(flags, positionals...)
+}
+
+func commonValueFlags() map[string]bool {
+	return map[string]bool{
+		"--config":            true,
+		"--mode":              true,
+		"--format":            true,
+		"--page-size":         true,
+		"--max-rows-affected": true,
+		"--cursor":            true,
+		"--sample":            true,
+		"--truncate-tokens":   true,
+		"--limit":             true,
+	}
+}
+
+func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine, selectedMode string) (*config.Config, conn.Spec, error) {
+	cfg, _, err := config.Load(configPath)
 	if err != nil {
 		return nil, conn.Spec{}, err
 	}
 	spec, err := conn.Resolve(ctx, conn.ResolveInput{
-		ConfigPath: common.configPath,
+		ConfigPath: configPath,
 		Config:     cfg,
-		Name:       common.connName,
-		DSN:        common.dsn,
-		Engine:     common.engine,
-		Mode:       common.mode,
+		Name:       name,
+		DSN:        dsn,
+		Engine:     engine,
+		Mode:       selectedMode,
 	})
 	if err != nil {
 		return nil, conn.Spec{}, err
 	}
 	return cfg, spec, nil
+}
+
+type execInput struct {
+	name   string
+	dsn    string
+	engine string
+	sql    string
+	file   string
+}
+
+func parseExecInput(args []string) (execInput, error) {
+	if len(args) == 0 {
+		return execInput{}, errors.New("exec requires SQL text, or: exec <conn> <sql>, exec dsn <engine> <dsn> <sql>")
+	}
+	if args[0] == "dsn" {
+		if len(args) < 4 {
+			return execInput{}, errors.New("exec dsn requires: <engine> <dsn> <sql>")
+		}
+		return execInput{engine: args[1], dsn: args[2], sql: args[3]}, nil
+	}
+	if args[0] == "file" {
+		if len(args) < 3 {
+			return execInput{}, errors.New("exec file requires: <conn> <path>")
+		}
+		return execInput{name: args[1], file: args[2]}, nil
+	}
+	if len(args) == 1 {
+		return execInput{sql: args[0]}, nil
+	}
+	return execInput{name: args[0], sql: args[1]}, nil
+}
+
+func parseInspectInput(kind string, args []string) (string, string, string, error) {
+	switch kind {
+	case "schema":
+		if len(args) == 0 {
+			return "", "", "", nil
+		}
+		schema := ""
+		if len(args) > 1 {
+			schema = args[1]
+		}
+		return args[0], schema, "", nil
+	case "table":
+		if len(args) == 0 {
+			return "", "", "", errors.New("inspect table requires: <table> or <conn> <table> [schema]")
+		}
+		if len(args) == 1 {
+			return "", "", args[0], nil
+		}
+		schema := ""
+		if len(args) > 2 {
+			schema = args[2]
+		}
+		return args[0], schema, args[1], nil
+	case "connection":
+		if len(args) == 0 {
+			return "", "", "", nil
+		}
+		return args[0], "", "", nil
+	default:
+		return "", "", "", fmt.Errorf("unknown inspect subcommand %q", kind)
+	}
+}
+
+func parseImportInput(args []string) (path, connName, table string, err error) {
+	if len(args) < 3 || args[0] != "file" {
+		return "", "", "", errors.New("import file requires: <path> <table> or <path> <conn> <table>")
+	}
+	if len(args) == 3 {
+		return args[1], "", args[2], nil
+	}
+	return args[1], args[2], args[3], nil
+}
+
+func parseExportInput(args []string) (table, connName, out string, err error) {
+	if len(args) < 3 || args[0] != "table" {
+		return "", "", "", errors.New("export table requires: <table> <out> or <table> <conn> <out>")
+	}
+	if len(args) == 3 {
+		return args[1], "", args[2], nil
+	}
+	return args[1], args[2], args[3], nil
 }
 
 func (a *App) runConn(ctx context.Context, args []string) error {
@@ -146,7 +253,11 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 	}
 	fs := newFlagSet("conn")
 	flags := bindConnFlags(fs)
-	if err := fs.Parse(args[1:]); err != nil {
+	flagArgs := normalizeFlagArgs(args[1:], map[string]bool{
+		"--config": true,
+		"--format": true,
+	})
+	if err := fs.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("conn")
 		}
@@ -154,7 +265,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 	}
 	cfg, path, err := config.Load(flags.configPath)
 	if err != nil {
-		return a.renderError(flags.format, flags.verbose, flags.verboseErrors, conn.Spec{}, "", err)
+		return a.renderError(flags.format, flags.verbose, conn.Spec{}, "", err)
 	}
 	switch args[0] {
 	case "list":
@@ -178,17 +289,18 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 		})
 	case "show", "resolve", "test":
 		rest := fs.Args()
-		if len(rest) == 0 {
-			return a.renderError(flags.format, flags.verbose, flags.verboseErrors, conn.Spec{}, "", fmt.Errorf("%s requires a connection name", args[0]))
+		name := ""
+		if len(rest) > 0 {
+			name = rest[0]
 		}
-		spec, err := conn.Resolve(ctx, conn.ResolveInput{Config: cfg, Name: rest[0]})
+		spec, err := conn.Resolve(ctx, conn.ResolveInput{Config: cfg, Name: name})
 		if err != nil {
-			return a.renderError(flags.format, flags.verbose, flags.verboseErrors, conn.Spec{Name: rest[0]}, "", err)
+			return a.renderError(flags.format, flags.verbose, conn.Spec{Name: name}, "", err)
 		}
 		if args[0] == "test" {
 			err = db.Ping(ctx, spec)
 			if err != nil {
-				return a.renderError(flags.format, flags.verbose, flags.verboseErrors, spec, "", err)
+				return a.renderError(flags.format, flags.verbose, spec, "", err)
 			}
 			return output.PrintEnvelope(flags.format, output.Envelope{
 				OK:         true,
@@ -227,32 +339,34 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	fs := newFlagSet("exec")
 	fs.Usage = func() {}
 	common := a.bindCommon(fs)
-	sqlText := fs.String("sql", "", "SQL statement")
-	filePath := fs.String("file", "", "SQL file path")
 	sampleSize := fs.Int("sample", 5, "sample size for agent output")
 	truncateTokens := fs.Int("truncate-tokens", 256, "soft token budget for summaries")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeFlagArgs(args, commonValueFlags())); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("exec")
 		}
 		return err
 	}
-	_, spec, err := a.resolveSpec(ctx, common)
+	input, err := parseExecInput(fs.Args())
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", err)
+		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	text, err := readSQL(*sqlText, *filePath)
+	_, spec, err := a.resolveSpec(ctx, common.configPath, input.name, input.dsn, input.engine, common.mode)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+		return a.renderError(common.format, common.verbose, conn.Spec{Name: input.name, Engine: input.engine}, "", err)
+	}
+	text, err := readSQL(input.sql, input.file)
+	if err != nil {
+		return a.renderError(common.format, common.verbose, spec, "", err)
 	}
 	analysis := sqlanalyzer.Analyze(text)
 	class := analysis.StatementClass
 	cursorOffset, err := parseCursor(common.cursor)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
+		return a.renderError(common.format, common.verbose, spec, class, err)
 	}
 	if err := enforcePolicy(spec, analysis, common); err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
+		return a.renderError(common.format, common.verbose, spec, class, err)
 	}
 	auditID := audit.ID("query:" + spec.Name)
 	if common.dryRun {
@@ -282,7 +396,7 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	if class == mode.ClassRead {
 		result, err := db.Query(ctx, spec, text, cursorOffset, common.pageSize)
 		if err != nil {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
+			return a.renderError(common.format, common.verbose, spec, class, err)
 		}
 		data := any(result.Rows)
 		summary := output.SummarizeResult(result, *truncateTokens)
@@ -317,7 +431,7 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	}
 	affected, err := db.ExecuteGuarded(ctx, spec, text, common.maxRows)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
+		return a.renderError(common.format, common.verbose, spec, class, err)
 	}
 	return output.PrintEnvelope(common.format, output.Envelope{
 		OK:             true,
@@ -347,30 +461,33 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 	}
 	fs := newFlagSet("inspect")
 	common := a.bindCommon(fs)
-	schema := fs.String("schema", "", "schema name")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(normalizeFlagArgs(args[1:], commonValueFlags())); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("inspect")
 		}
 		return err
 	}
-	_, spec, err := a.resolveSpec(ctx, common)
+	connName, schema, table, err := parseInspectInput(args[0], fs.Args())
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", err)
+		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
+	}
+	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	if err != nil {
+		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
 	}
 	switch args[0] {
 	case "schema":
 		schemas, err := db.ListSchemas(ctx, spec)
 		if err != nil {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+			return a.renderError(common.format, common.verbose, spec, "", err)
 		}
-		tables, err := db.ListTables(ctx, spec, *schema)
-		if err != nil && *schema != "" {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+		tables, err := db.ListTables(ctx, spec, schema)
+		if err != nil && schema != "" {
+			return a.renderError(common.format, common.verbose, spec, "", err)
 		}
-		relations, err := db.ListRelations(ctx, spec, *schema)
+		relations, err := db.ListRelations(ctx, spec, schema)
 		if err != nil {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+			return a.renderError(common.format, common.verbose, spec, "", err)
 		}
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
@@ -390,13 +507,9 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Verbose: common.verbose,
 		})
 	case "table":
-		rest := fs.Args()
-		if len(rest) == 0 {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", errors.New("inspect table requires a table name"))
-		}
-		info, err := db.DescribeTable(ctx, spec, *schema, rest[0])
+		info, err := db.DescribeTable(ctx, spec, schema, table)
 		if err != nil {
-			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+			return a.renderError(common.format, common.verbose, spec, "", err)
 		}
 		data := any(info)
 		if strings.EqualFold(common.format, "agent") {
@@ -418,7 +531,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Summary:    fmt.Sprintf("table %s.%s has %d columns; run exec next if needed", info.Schema, info.Name, len(info.Columns)),
 			Data:       data,
 			Next:       "exec",
-			AuditID:    audit.ID("inspect-table:" + spec.Name + ":" + rest[0]),
+			AuditID:    audit.ID("inspect-table:" + spec.Name + ":" + table),
 			Meta:       output.ConnectionMeta(spec),
 			Verbose:    common.verbose,
 		})
@@ -445,39 +558,35 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		return printHelp("export")
 	}
-	if len(args) < 2 || args[0] != "table" {
-		return errors.New("export currently supports: export table <name>")
-	}
 	fs := newFlagSet("export")
 	common := a.bindCommon(fs)
-	outPath := fs.String("out", "", "output file path")
 	limit := fs.Int("limit", 0, "optional row limit for export")
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeFlagArgs(args, commonValueFlags())); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("export")
 		}
 		return err
 	}
-	if *outPath == "" {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", errors.New("export requires --out to avoid mixing export content with audit output"))
-	}
-	_, spec, err := a.resolveSpec(ctx, common)
+	table, connName, outPath, err := parseExportInput(fs.Args())
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", err)
+		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	table := args[1]
+	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	if err != nil {
+		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
+	}
 	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
 	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassRead, err)
+		return a.renderError(common.format, common.verbose, spec, mode.ClassRead, err)
 	}
-	file, err := os.Create(*outPath)
+	file, err := os.Create(outPath)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+		return a.renderError(common.format, common.verbose, spec, "", err)
 	}
 	defer file.Close()
 	if err := db.ExportRows(result.Rows, result.Columns, common.format, file); err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+		return a.renderError(common.format, common.verbose, spec, "", err)
 	}
 	return output.PrintEnvelope("agent", output.Envelope{
 		OK:         true,
@@ -488,7 +597,7 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 		RowCount:   result.RowCount,
 		Summary:    fmt.Sprintf("exported %d row(s) from %s; inspect the output file if needed", result.RowCount, table),
 		Data: map[string]any{
-			"out":    *outPath,
+			"out":    outPath,
 			"format": common.format,
 		},
 		Next:    "exec",
@@ -502,31 +611,28 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		return printHelp("import")
 	}
-	if len(args) < 2 || args[0] != "file" {
-		return errors.New("import currently supports: import file <path> --into <table>")
-	}
 	fs := newFlagSet("import")
 	common := a.bindCommon(fs)
-	into := fs.String("into", "", "target table")
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(normalizeFlagArgs(args, commonValueFlags())); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("import")
 		}
 		return err
 	}
-	if *into == "" {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", errors.New("--into is required"))
-	}
-	_, spec, err := a.resolveSpec(ctx, common)
+	path, connName, into, err := parseImportInput(fs.Args())
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", err)
+		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	if err := enforcePolicy(spec, sqlanalyzer.Analyze("insert into "+*into+" values (?)"), common); err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassWriteData, err)
-	}
-	columns, rows, err := readImportFile(args[1])
+	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassWriteData, err)
+		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
+	}
+	if err := enforcePolicy(spec, sqlanalyzer.Analyze("insert into "+into+" values (?)"), common); err != nil {
+		return a.renderError(common.format, common.verbose, spec, mode.ClassWriteData, err)
+	}
+	columns, rows, err := readImportFile(path)
+	if err != nil {
+		return a.renderError(common.format, common.verbose, spec, mode.ClassWriteData, err)
 	}
 	if common.dryRun {
 		return output.PrintEnvelope(common.format, output.Envelope{
@@ -535,20 +641,20 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
-			Summary:    fmt.Sprintf("validated %d row(s) for import into %s; run again without --dry-run when ready", len(rows), *into),
+			Summary:    fmt.Sprintf("validated %d row(s) for import into %s; run again without --dry-run when ready", len(rows), into),
 			Data: map[string]any{
 				"columns": columns,
 				"rows":    len(rows),
 			},
-			Next:    "ack_and_retry",
+			Next:    "exec",
 			AuditID: audit.ID("import-dry:" + spec.Name),
 			Meta:    output.ConnectionMeta(spec),
 			Verbose: common.verbose,
 		})
 	}
-	count, err := db.ImportRows(ctx, spec, *into, columns, rows)
+	count, err := db.ImportRows(ctx, spec, into, columns, rows)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassWriteData, err)
+		return a.renderError(common.format, common.verbose, spec, mode.ClassWriteData, err)
 	}
 	return output.PrintEnvelope(common.format, output.Envelope{
 		OK:         true,
@@ -557,13 +663,13 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 		Engine:     spec.Engine,
 		Connection: spec.Name,
 		RowCount:   int(count),
-		Summary:    fmt.Sprintf("imported %d row(s) into %s; run exec to verify the load", count, *into),
+		Summary:    fmt.Sprintf("imported %d row(s) into %s; run exec to verify the load", count, into),
 		Data: map[string]any{
-			"table": *into,
+			"table": into,
 			"rows":  count,
 		},
 		Next:    "exec",
-		AuditID: audit.ID("import:" + spec.Name + ":" + *into),
+		AuditID: audit.ID("import:" + spec.Name + ":" + into),
 		Meta:    output.ConnectionMeta(spec),
 		Verbose: common.verbose,
 	})
@@ -580,12 +686,6 @@ func enforcePolicy(spec conn.Spec, analysis sqlanalyzer.Analysis, common *common
 	if analysis.HasUnsafeWrite {
 		return fmt.Errorf("unsafe write blocked: missing WHERE clause")
 	}
-	if class == mode.ClassWriteData && !common.requireAck && !common.dryRun {
-		return fmt.Errorf("write statements require --require-ack by default")
-	}
-	if (spec.Mode.RequiresAck() || class == mode.ClassDDL || class == mode.ClassAdmin) && !common.requireAck && !common.dryRun {
-		return fmt.Errorf("mode %s or statement class %s requires --require-ack", spec.Mode, class)
-	}
 	return nil
 }
 
@@ -597,7 +697,7 @@ func readSQL(inline, path string) (string, error) {
 		buf, err := os.ReadFile(path)
 		return string(buf), err
 	default:
-		return "", errors.New("one of --sql or --file is required")
+		return "", errors.New("exec requires SQL text or: exec file <conn> <path>")
 	}
 }
 
@@ -729,15 +829,11 @@ func classifyErrorCode(err error) string {
 		return "unknown_statement"
 	case strings.Contains(msg, "does not allow statement class"):
 		return "mode_blocked"
-	case strings.Contains(msg, "requires --require-ack"):
-		return "ack_required"
-	case strings.Contains(msg, "write statements require --require-ack"):
-		return "ack_required"
 	case strings.Contains(msg, "missing where"):
 		return "missing_where"
 	case strings.Contains(msg, "cursor must be a non-negative integer"):
 		return "invalid_cursor"
-	case strings.Contains(msg, "one of --sql or --file is required"):
+	case strings.Contains(msg, "exec requires sql text"):
 		return "missing_sql"
 	default:
 		return "sql_error"
@@ -747,25 +843,23 @@ func classifyErrorCode(err error) string {
 func hintForCode(code string) string {
 	switch code {
 	case "conn_not_found":
-		return "Run dbx conn list or use a valid --conn name."
+		return "Run dbx conn list or use a valid connection name."
 	case "no_connection":
-		return "Provide --conn or use --dsn with --engine."
+		return "Provide a connection name or use: exec dsn <engine> <dsn> <sql>."
 	case "multiple_statements_blocked":
 		return "Split the SQL into one statement per exec call."
 	case "unknown_statement":
 		return "Use one supported statement type per exec call."
 	case "mode_blocked":
 		return "Use a mode that allows this statement class."
-	case "ack_required":
-		return "Add --require-ack and rerun the same command."
 	case "missing_where":
 		return "Add a WHERE clause or narrow the write before retrying."
 	case "invalid_cursor":
 		return "Use --cursor <non-negative integer> from a previous result."
 	case "missing_sql":
-		return "Provide --sql or --file."
+		return "Use exec <conn> '<sql>' or exec file <conn> <path>."
 	default:
-		return "Check the SQL, target connection, or rerun with --verbose-errors."
+		return "Check the SQL text, target connection, or input file."
 	}
 }
 
@@ -777,8 +871,6 @@ func nextForCode(code string) string {
 		return "refine_exec"
 	case "mode_blocked":
 		return "refine_exec"
-	case "ack_required":
-		return "ack_and_retry"
 	case "missing_where":
 		return "refine_exec"
 	case "invalid_cursor":
@@ -800,8 +892,6 @@ func summaryForError(code string) string {
 		return "statement type is blocked by default"
 	case "mode_blocked":
 		return "statement blocked by the current mode"
-	case "ack_required":
-		return "explicit confirmation is required for this operation"
 	case "missing_where":
 		return "unsafe write blocked because WHERE is missing"
 	case "invalid_cursor":
@@ -813,7 +903,7 @@ func summaryForError(code string) string {
 	}
 }
 
-func (a *App) renderError(format string, verbose bool, verboseErrors bool, spec conn.Spec, class mode.StatementClass, err error) error {
+func (a *App) renderError(format string, verbose bool, spec conn.Spec, class mode.StatementClass, err error) error {
 	code := classifyErrorCode(err)
 	env := output.Envelope{
 		OK:             false,
@@ -827,7 +917,7 @@ func (a *App) renderError(format string, verbose bool, verboseErrors bool, spec 
 		Summary:        summaryForError(code),
 		Verbose:        verbose,
 	}
-	if verboseErrors {
+	if err != nil {
 		env.Warnings = []string{err.Error()}
 	}
 	if printErr := output.PrintEnvelope(format, env); printErr != nil {
