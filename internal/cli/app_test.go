@@ -38,6 +38,9 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	if !strings.Contains(execHelp, "Run any SQL") || !strings.Contains(execHelp, "Lantern   read only; default for selects") {
 		t.Fatalf("exec help should include compact mode guidance, got:\n%s", execHelp)
 	}
+	if !strings.Contains(execHelp, "Multiple statements are blocked by default.") || !strings.Contains(execHelp, "Use --cursor <n> to continue a paged read.") {
+		t.Fatalf("exec help should include default safety and cursor guidance, got:\n%s", execHelp)
+	}
 	if strings.Contains(execHelp, "Common next actions") || strings.Contains(execHelp, "agent-first") {
 		t.Fatalf("exec help should omit design sections, got:\n%s", execHelp)
 	}
@@ -67,8 +70,8 @@ func TestExecDefaultAgentOutput(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if got := payload["kind"]; got != "query_result" {
-		t.Fatalf("kind = %v, want query_result", got)
+	if got := payload["kind"]; got != "exec_result" {
+		t.Fatalf("kind = %v, want exec_result", got)
 	}
 	if got := payload["more"]; got != true {
 		t.Fatalf("more = %v, want true", got)
@@ -87,6 +90,9 @@ func TestExecDefaultAgentOutput(t *testing.T) {
 	}
 	if got := int(data["seen"].(float64)); got != 25 {
 		t.Fatalf("seen = %d, want 25", got)
+	}
+	if nextCursor := data["next_cursor"]; nextCursor != "20" {
+		t.Fatalf("next_cursor = %v, want 20", nextCursor)
 	}
 }
 
@@ -124,6 +130,87 @@ func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	}
 	if _, ok := errPayload["warnings"]; !ok {
 		t.Fatalf("verbose error output should include warnings: %#v", errPayload)
+	}
+}
+
+func TestExecBlocksMultiStatementAndWriteWithoutAck(t *testing.T) {
+	configPath := makeSQLiteFixture(t, 3)
+
+	multiOut := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "--sql", "select 1; select 2"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var multiPayload map[string]any
+	if err := json.Unmarshal([]byte(multiOut), &multiPayload); err != nil {
+		t.Fatalf("unmarshal multi output: %v", err)
+	}
+	if multiPayload["code"] != "multiple_statements_blocked" {
+		t.Fatalf("expected multi statement block, got %#v", multiPayload)
+	}
+
+	writeOut := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "--mode", "Tweezers", "--sql", "update users set name = 'x' where id = 1"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var writePayload map[string]any
+	if err := json.Unmarshal([]byte(writeOut), &writePayload); err != nil {
+		t.Fatalf("unmarshal write output: %v", err)
+	}
+	if writePayload["code"] != "ack_required" {
+		t.Fatalf("expected ack_required, got %#v", writePayload)
+	}
+}
+
+func TestExecCursorAndInspectRelations(t *testing.T) {
+	configPath := makeSQLiteRelationFixture(t)
+
+	pageOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--cursor", "20", "--sql", "select id, name from users order by id"})
+	})
+	var pagePayload map[string]any
+	if err := json.Unmarshal([]byte(pageOut), &pagePayload); err != nil {
+		t.Fatalf("unmarshal page output: %v", err)
+	}
+	data := pagePayload["data"].(map[string]any)
+	rows := data["rows"].([]any)
+	if len(rows) != 5 {
+		t.Fatalf("expected 5 rows from cursor page, got %d", len(rows))
+	}
+
+	tableOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"inspect", "table", "--config", configPath, "orders"})
+	})
+	var tablePayload map[string]any
+	if err := json.Unmarshal([]byte(tableOut), &tablePayload); err != nil {
+		t.Fatalf("unmarshal inspect table output: %v", err)
+	}
+	tableData := tablePayload["data"].(map[string]any)
+	if _, ok := tableData["primary_key"]; !ok {
+		t.Fatalf("expected primary key in inspect table output: %#v", tableData)
+	}
+	if _, ok := tableData["foreign_keys"]; !ok {
+		t.Fatalf("expected foreign keys in inspect table output: %#v", tableData)
+	}
+
+	schemaOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"inspect", "schema", "--config", configPath})
+	})
+	var schemaPayload map[string]any
+	if err := json.Unmarshal([]byte(schemaOut), &schemaPayload); err != nil {
+		t.Fatalf("unmarshal inspect schema output: %v", err)
+	}
+	schemaData := schemaPayload["data"].(map[string]any)
+	relations := schemaData["relations"].([]any)
+	if len(relations) == 0 {
+		t.Fatalf("expected relations in inspect schema output: %#v", schemaData)
 	}
 }
 
@@ -170,6 +257,50 @@ func makeSQLiteFixture(t *testing.T, rows int) string {
 	}
 	for i := 1; i <= rows; i++ {
 		if _, err := sqlDB.Exec(`insert into users (id, name) values (?, ?)`, i, "user"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+default_connection = "local-sqlite"
+
+[connections.local-sqlite]
+engine = "sqlite"
+path = "` + dbPath + `"
+mode = "Lantern"
+tags = ["local"]
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configPath
+}
+
+func makeSQLiteRelationFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "relations.db")
+	sqlDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if _, err := sqlDB.Exec(`pragma foreign_keys = on`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.Exec(`create table users (id integer primary key, name text not null)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.Exec(`create table orders (id integer primary key, user_id integer not null, total integer default 0, foreign key(user_id) references users(id))`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 25; i++ {
+		if _, err := sqlDB.Exec(`insert into users (id, name) values (?, ?)`, i, "user"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		if _, err := sqlDB.Exec(`insert into orders (id, user_id, total) values (?, ?, ?)`, i, i, 10); err != nil {
 			t.Fatal(err)
 		}
 	}

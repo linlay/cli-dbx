@@ -66,7 +66,7 @@ func inspectHelp() string {
 	return `dbx inspect
 
 When to use:
-  Look at schema or table shape before writing SQL.
+  Look at schema, keys, and relations before writing SQL.
 
 Commands:
   schema
@@ -93,8 +93,10 @@ Minimum:
 
 Facts:
   Read results are sampled by default.
+  Multiple statements are blocked by default.
   Risky writes may require --require-ack.
   Use --verbose only when you need more context.
+  Use --cursor <n> to continue a paged read.
 
 Modes:
   Lantern   read only; default for selects

@@ -186,29 +186,39 @@ func CompactColumns(columns []db.Column) []string {
 	return out
 }
 
-func AgentQueryData(result db.QueryResult, sampleSize int) map[string]any {
+func AgentQueryData(result db.QueryResult, sampleSize int, cursor, nextCursor string) map[string]any {
 	rows := result.Rows
 	if sampleSize > 0 && len(rows) > sampleSize {
 		rows = rows[:sampleSize]
 	}
-	return map[string]any{
+	data := map[string]any{
 		"cols":      CompactColumns(result.Columns),
 		"rows":      rows,
 		"returned":  len(rows),
 		"seen":      result.SeenCount,
 		"truncated": result.Truncated,
 	}
+	if cursor != "" {
+		data["cursor"] = cursor
+	}
+	if nextCursor != "" {
+		data["next_cursor"] = nextCursor
+	}
+	return data
 }
 
-func AgentQuerySummary(result db.QueryResult, sampleSize int) string {
+func AgentQuerySummary(result db.QueryResult, sampleSize int, nextCursor string) string {
 	returned := len(result.Rows)
 	if sampleSize > 0 && returned > sampleSize {
 		returned = sampleSize
 	}
 	switch {
 	case result.SeenCount == 0:
-		return "no rows found; refine the query only if you expected data"
+		return "no rows found; refine the exec only if you expected data"
 	case result.Truncated:
+		if nextCursor != "" {
+			return fmt.Sprintf("%d rows found; returned %d samples; continue with --cursor %s if needed", result.SeenCount, returned, nextCursor)
+		}
 		return fmt.Sprintf("%d rows found; returned %d samples; refine with where/order by if needed", result.SeenCount, returned)
 	default:
 		return fmt.Sprintf("%d rows found; returned %d samples; inspect or refine if you need more detail", result.SeenCount, returned)

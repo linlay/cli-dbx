@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/linlay/dbx/internal/audit"
@@ -18,7 +19,7 @@ import (
 	"github.com/linlay/dbx/internal/db"
 	"github.com/linlay/dbx/internal/mode"
 	"github.com/linlay/dbx/internal/output"
-	"github.com/linlay/dbx/internal/sqlclass"
+	"github.com/linlay/dbx/internal/sqlanalyzer"
 )
 
 type App struct{}
@@ -71,6 +72,7 @@ type commonFlags struct {
 	tx            bool
 	pageSize      int
 	maxRows       int
+	cursor        string
 	verbose       bool
 	verboseErrors bool
 }
@@ -95,6 +97,7 @@ func (a *App) bindCommon(fs *flag.FlagSet) *commonFlags {
 	fs.BoolVar(&c.tx, "tx", false, "transaction hint for future compatibility")
 	fs.IntVar(&c.pageSize, "page-size", 20, "maximum rows to materialize for read results")
 	fs.IntVar(&c.maxRows, "max-rows-affected", 1000, "maximum rows affected by write operations")
+	fs.StringVar(&c.cursor, "cursor", "", "continuation cursor for paged reads")
 	fs.BoolVar(&c.verbose, "verbose", false, "include extra metadata in output")
 	fs.BoolVar(&c.verboseErrors, "verbose-errors", false, "include raw driver errors in business error output")
 	return c
@@ -168,7 +171,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 			OK:         true,
 			Kind:       "conn_list",
 			Connection: path,
-			Summary:    fmt.Sprintf("%d connection targets available; test one before querying", len(names)),
+			Summary:    fmt.Sprintf("%d connection targets available; test one before exec", len(names)),
 			Data:       map[string]any{"connections": names},
 			AuditID:    audit.ID("conn-list"),
 			Verbose:    flags.verbose,
@@ -242,30 +245,42 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
 	}
-	class := sqlclass.Classify(text)
-	if err := enforcePolicy(spec, class, text, common); err != nil {
+	analysis := sqlanalyzer.Analyze(text)
+	class := analysis.StatementClass
+	cursorOffset, err := parseCursor(common.cursor)
+	if err != nil {
+		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
+	}
+	if err := enforcePolicy(spec, analysis, common); err != nil {
 		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
 	}
 	auditID := audit.ID("query:" + spec.Name)
 	if common.dryRun {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
-			Kind:           "query_plan",
+			Kind:           "exec_plan",
 			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
 			StatementClass: class,
 			RiskLevel:      spec.Mode.RiskLevel(class),
-			Summary:        "dry run passed policy checks; execute the same command without --dry-run when ready",
-			Next:           nextForClass(class, false),
-			AuditID:        auditID,
-			Fingerprint:    audit.Fingerprint(text),
-			Meta:           output.ConnectionMeta(spec),
-			Verbose:        common.verbose,
+			Summary:        "dry run passed policy checks; run exec without --dry-run when ready",
+			Data: map[string]any{
+				"objects":      analysis.Objects,
+				"statements":   len(analysis.Statements),
+				"needs_ack":    analysis.NeedsAck,
+				"multi":        analysis.MultiStatement,
+				"unsafe_write": analysis.HasUnsafeWrite,
+			},
+			Next:        nextForClass(class, false),
+			AuditID:     auditID,
+			Fingerprint: audit.Fingerprint(text),
+			Meta:        output.ConnectionMeta(spec),
+			Verbose:     common.verbose,
 		})
 	}
 	if class == mode.ClassRead {
-		result, err := db.Query(ctx, spec, text, common.pageSize)
+		result, err := db.Query(ctx, spec, text, cursorOffset, common.pageSize)
 		if err != nil {
 			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, class, err)
 		}
@@ -273,15 +288,16 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 		summary := output.SummarizeResult(result, *truncateTokens)
 		more := result.Truncated
 		next := nextForClass(class, more)
+		nextCursorValue := nextCursor(cursorOffset, common.pageSize, result)
 		if strings.EqualFold(common.format, "llm") {
 			data = output.LLMData(result, *sampleSize)
 		} else if strings.EqualFold(common.format, "agent") {
-			data = output.AgentQueryData(result, *sampleSize)
-			summary = output.AgentQuerySummary(result, *sampleSize)
+			data = output.AgentQueryData(result, *sampleSize, common.cursor, nextCursorValue)
+			summary = output.AgentQuerySummary(result, *sampleSize, nextCursorValue)
 		}
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
-			Kind:           "query_result",
+			Kind:           "exec_result",
 			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
@@ -352,16 +368,21 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if err != nil && *schema != "" {
 			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
 		}
+		relations, err := db.ListRelations(ctx, spec, *schema)
+		if err != nil {
+			return a.renderError(common.format, common.verbose, common.verboseErrors, spec, "", err)
+		}
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_schema",
 			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
-			Summary:    fmt.Sprintf("%d schema(s) and %d table(s) found; inspect a table before querying", len(schemas), len(tables)),
+			Summary:    fmt.Sprintf("%d schema(s), %d table(s), %d relation(s) found; inspect a table before exec", len(schemas), len(tables), len(relations)),
 			Data: map[string]any{
-				"schemas": schemas,
-				"tables":  tables,
+				"schemas":   schemas,
+				"tables":    tables,
+				"relations": relations,
 			},
 			Next:    "inspect_table",
 			AuditID: audit.ID("inspect-schema:" + spec.Name),
@@ -380,9 +401,12 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		data := any(info)
 		if strings.EqualFold(common.format, "agent") {
 			data = map[string]any{
-				"schema": info.Schema,
-				"name":   info.Name,
-				"cols":   output.CompactColumns(info.Columns),
+				"schema":       info.Schema,
+				"name":         info.Name,
+				"cols":         info.Columns,
+				"primary_key":  info.PrimaryKey,
+				"unique_keys":  info.UniqueKeys,
+				"foreign_keys": info.ForeignKeys,
 			}
 		}
 		return output.PrintEnvelope(common.format, output.Envelope{
@@ -393,7 +417,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Connection: spec.Name,
 			Summary:    fmt.Sprintf("table %s.%s has %d columns; run exec next if needed", info.Schema, info.Name, len(info.Columns)),
 			Data:       data,
-			Next:       "query",
+			Next:       "exec",
 			AuditID:    audit.ID("inspect-table:" + spec.Name + ":" + rest[0]),
 			Meta:       output.ConnectionMeta(spec),
 			Verbose:    common.verbose,
@@ -443,7 +467,7 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	}
 	table := args[1]
 	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
-	result, err := db.Query(ctx, spec, query, *limit)
+	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassRead, err)
 	}
@@ -467,7 +491,7 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 			"out":    *outPath,
 			"format": common.format,
 		},
-		Next:    "query",
+		Next:    "exec",
 		AuditID: audit.ID("export:" + spec.Name + ":" + table),
 		Meta:    output.ConnectionMeta(spec),
 		Verbose: common.verbose,
@@ -497,7 +521,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, common.verboseErrors, conn.Spec{Name: common.connName, Engine: common.engine}, "", err)
 	}
-	if err := enforcePolicy(spec, mode.ClassWriteData, "insert into", common); err != nil {
+	if err := enforcePolicy(spec, sqlanalyzer.Analyze("insert into "+*into+" values (?)"), common); err != nil {
 		return a.renderError(common.format, common.verbose, common.verboseErrors, spec, mode.ClassWriteData, err)
 	}
 	columns, rows, err := readImportFile(args[1])
@@ -538,19 +562,26 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 			"table": *into,
 			"rows":  count,
 		},
-		Next:    "query",
+		Next:    "exec",
 		AuditID: audit.ID("import:" + spec.Name + ":" + *into),
 		Meta:    output.ConnectionMeta(spec),
 		Verbose: common.verbose,
 	})
 }
 
-func enforcePolicy(spec conn.Spec, class mode.StatementClass, sqlText string, common *commonFlags) error {
+func enforcePolicy(spec conn.Spec, analysis sqlanalyzer.Analysis, common *commonFlags) error {
+	class := analysis.StatementClass
+	if err := analysis.ValidateSingleStatement(); err != nil {
+		return err
+	}
 	if !spec.Mode.Allows(class) {
 		return fmt.Errorf("mode %s does not allow statement class %s", spec.Mode, class)
 	}
-	if sqlclass.HasUnsafeWrite(sqlText) {
+	if analysis.HasUnsafeWrite {
 		return fmt.Errorf("unsafe write blocked: missing WHERE clause")
+	}
+	if class == mode.ClassWriteData && !common.requireAck && !common.dryRun {
+		return fmt.Errorf("write statements require --require-ack by default")
 	}
 	if (spec.Mode.RequiresAck() || class == mode.ClassDDL || class == mode.ClassAdmin) && !common.requireAck && !common.dryRun {
 		return fmt.Errorf("mode %s or statement class %s requires --require-ack", spec.Mode, class)
@@ -653,13 +684,31 @@ func isHelpArg(arg string) bool {
 	return arg == "--help" || arg == "-h" || arg == "help"
 }
 
+func parseCursor(raw string) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("cursor must be a non-negative integer")
+	}
+	return value, nil
+}
+
+func nextCursor(offset, pageSize int, result db.QueryResult) string {
+	if !result.Truncated || pageSize <= 0 {
+		return ""
+	}
+	return strconv.Itoa(offset + pageSize)
+}
+
 func nextForClass(class mode.StatementClass, more bool) string {
 	if more {
 		return "fetch_more"
 	}
 	switch class {
 	case mode.ClassRead:
-		return "refine_query"
+		return "refine_exec"
 	case mode.ClassWriteData, mode.ClassDDL, mode.ClassAdmin:
 		return "inspect_table"
 	default:
@@ -674,12 +723,20 @@ func classifyErrorCode(err error) string {
 		return "conn_not_found"
 	case strings.Contains(msg, "no connection selected"):
 		return "no_connection"
+	case strings.Contains(msg, "multiple statements are blocked"):
+		return "multiple_statements_blocked"
+	case strings.Contains(msg, "statement type is unknown"):
+		return "unknown_statement"
 	case strings.Contains(msg, "does not allow statement class"):
 		return "mode_blocked"
 	case strings.Contains(msg, "requires --require-ack"):
 		return "ack_required"
+	case strings.Contains(msg, "write statements require --require-ack"):
+		return "ack_required"
 	case strings.Contains(msg, "missing where"):
 		return "missing_where"
+	case strings.Contains(msg, "cursor must be a non-negative integer"):
+		return "invalid_cursor"
 	case strings.Contains(msg, "one of --sql or --file is required"):
 		return "missing_sql"
 	default:
@@ -693,12 +750,18 @@ func hintForCode(code string) string {
 		return "Run dbx conn list or use a valid --conn name."
 	case "no_connection":
 		return "Provide --conn or use --dsn with --engine."
+	case "multiple_statements_blocked":
+		return "Split the SQL into one statement per exec call."
+	case "unknown_statement":
+		return "Use one supported statement type per exec call."
 	case "mode_blocked":
 		return "Use a mode that allows this statement class."
 	case "ack_required":
 		return "Add --require-ack and rerun the same command."
 	case "missing_where":
 		return "Add a WHERE clause or narrow the write before retrying."
+	case "invalid_cursor":
+		return "Use --cursor <non-negative integer> from a previous result."
 	case "missing_sql":
 		return "Provide --sql or --file."
 	default:
@@ -710,14 +773,18 @@ func nextForCode(code string) string {
 	switch code {
 	case "conn_not_found", "no_connection":
 		return "inspect_connection"
+	case "multiple_statements_blocked", "unknown_statement":
+		return "refine_exec"
 	case "mode_blocked":
-		return "refine_query"
+		return "refine_exec"
 	case "ack_required":
 		return "ack_and_retry"
 	case "missing_where":
-		return "refine_query"
+		return "refine_exec"
+	case "invalid_cursor":
+		return "fetch_more"
 	default:
-		return "refine_query"
+		return "refine_exec"
 	}
 }
 
@@ -727,12 +794,18 @@ func summaryForError(code string) string {
 		return "connection target not found"
 	case "no_connection":
 		return "no connection target selected"
+	case "multiple_statements_blocked":
+		return "multiple statements are blocked by default"
+	case "unknown_statement":
+		return "statement type is blocked by default"
 	case "mode_blocked":
 		return "statement blocked by the current mode"
 	case "ack_required":
 		return "explicit confirmation is required for this operation"
 	case "missing_where":
 		return "unsafe write blocked because WHERE is missing"
+	case "invalid_cursor":
+		return "continuation cursor is invalid"
 	case "missing_sql":
 		return "no SQL input was provided"
 	default:
