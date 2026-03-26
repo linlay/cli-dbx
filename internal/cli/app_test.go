@@ -45,7 +45,7 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	if !strings.Contains(execHelp, "--page-size <n>               read page size; default 100") || !strings.Contains(execHelp, "--format <json|table>         result format; default json") {
 		t.Fatalf("exec help should list retained params and defaults, got:\n%s", execHelp)
 	}
-	if !strings.Contains(execHelp, "Keep the same order by when you continue with --cursor.") || !strings.Contains(execHelp, "dbx exec 'select * from users order by id' --cursor 100") {
+	if !strings.Contains(execHelp, "Keep the same order by when you continue with --cursor.") || !strings.Contains(execHelp, "dbx exec local-pg 'select * from users order by id' --cursor 100") {
 		t.Fatalf("exec help should include pagination guidance, got:\n%s", execHelp)
 	}
 	if strings.Contains(execHelp, "--require-ack") || strings.Contains(execHelp, "--verbose-errors") || strings.Contains(execHelp, "sampled by default") {
@@ -141,31 +141,41 @@ func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	}
 }
 
-func TestExecUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
+func TestExecRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "select id from users order by id"})
+		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "select id from users order by id"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if payload["conn"] != "local-sqlite" {
-		t.Fatalf("expected default connection local-sqlite, got %#v", payload)
+	if payload["code"] != "missing_sql" {
+		t.Fatalf("expected explicit-conn error, got %#v", payload)
 	}
 }
 
-func TestInspectUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
+func TestInspectRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteRelationFixture(t)
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"inspect", "table", "--config", configPath, "orders"})
+		err := New().Run(context.Background(), []string{"inspect", "table", "--config", configPath, "orders"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if payload["conn"] != "local-sqlite" {
-		t.Fatalf("expected default connection local-sqlite, got %#v", payload)
+	if payload["kind"] != "error" || !strings.Contains(payload["warnings"].([]any)[0].(string), "inspect table requires") {
+		t.Fatalf("expected explicit-conn error, got %#v", payload)
 	}
 }
 
@@ -278,21 +288,26 @@ func TestSQLErrorIncludesDriverReasonByDefault(t *testing.T) {
 	}
 }
 
-func TestImportUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
+func TestImportRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 0)
 	csvPath := filepath.Join(t.TempDir(), "users.csv")
 	if err := os.WriteFile(csvPath, []byte("id,name\n1,Ada\n2,Linus\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "users"})
+		err := New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "users"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if payload["conn"] != "local-sqlite" || payload["kind"] != "import_result" {
-		t.Fatalf("expected default-conn import result, got %#v", payload)
+	if payload["kind"] != "error" || !strings.Contains(payload["warnings"].([]any)[0].(string), "import file requires") {
+		t.Fatalf("expected explicit-conn import error, got %#v", payload)
 	}
 }
 
@@ -345,18 +360,76 @@ func TestExecCursorAndInspectRelations(t *testing.T) {
 	}
 }
 
-func TestExportUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
+func TestExportRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 2)
 	outFile := filepath.Join(t.TempDir(), "users.csv")
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"export", "--config", configPath, "--format", "csv", "table", "users", outFile})
+		err := New().Run(context.Background(), []string{"export", "--config", configPath, "--format", "csv", "table", "users", outFile})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if payload["conn"] != "local-sqlite" || payload["kind"] != "export_result" {
-		t.Fatalf("expected default-conn export result, got %#v", payload)
+	if payload["kind"] != "error" || !strings.Contains(payload["warnings"].([]any)[0].(string), "export table requires") {
+		t.Fatalf("expected explicit-conn export error, got %#v", payload)
+	}
+}
+
+func TestExecSupportsConfigFilePath(t *testing.T) {
+	configPath := makeSQLiteConfigFileFixture(t, 3)
+	out := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "select id from users order by id"})
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out)
+	}
+	if payload["kind"] != "exec_result" || payload["conn"] != "local-sqlite" {
+		t.Fatalf("expected exec_result via config file, got %#v", payload)
+	}
+}
+
+func TestConnListScansDirectoryInStableOrder(t *testing.T) {
+	configDir := t.TempDir()
+	for name, raw := range map[string]string{
+		"zeta.toml": `
+[connection]
+engine = "mysql"
+mode = "Lantern"
+`,
+		"alpha.toml": `
+[connection]
+engine = "sqlite"
+path = "./alpha.db"
+mode = "Lantern"
+`,
+		"notes.txt": "ignore me",
+	} {
+		if err := os.WriteFile(filepath.Join(configDir, name), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"conn", "list", "--config", configDir})
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out)
+	}
+	data := payload["data"].(map[string]any)
+	connections := data["connections"].([]any)
+	if len(connections) != 2 {
+		t.Fatalf("expected two connections, got %#v", payload)
+	}
+	first := connections[0].(map[string]any)
+	second := connections[1].(map[string]any)
+	if first["name"] != "alpha" || second["name"] != "zeta" {
+		t.Fatalf("expected sorted names, got %#v", connections)
 	}
 }
 
@@ -424,20 +497,21 @@ func makeSQLiteFixture(t *testing.T, rows int) string {
 			t.Fatal(err)
 		}
 	}
-	configPath := filepath.Join(dir, "config.toml")
+	configDir := filepath.Join(dir, "dbx")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	raw := `
-default_connection = "local-sqlite"
-
-[connections.local-sqlite]
+[connection]
 engine = "sqlite"
 path = "` + dbPath + `"
 mode = "Lantern"
 tags = ["local"]
 `
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return configPath
+	return configDir
 }
 
 func makeSQLiteRelationFixture(t *testing.T) string {
@@ -468,17 +542,28 @@ func makeSQLiteRelationFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	configPath := filepath.Join(dir, "config.toml")
+	configDir := filepath.Join(dir, "dbx")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	raw := `
-default_connection = "local-sqlite"
-
-[connections.local-sqlite]
+[connection]
 engine = "sqlite"
 path = "` + dbPath + `"
 mode = "Lantern"
 tags = ["local"]
 `
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configDir
+}
+
+func makeSQLiteConfigFileFixture(t *testing.T, rows int) string {
+	t.Helper()
+	configDir := makeSQLiteFixture(t, rows)
+	configPath := filepath.Join(configDir, "local-sqlite.toml")
+	if _, err := os.Stat(configPath); err != nil {
 		t.Fatal(err)
 	}
 	return configPath

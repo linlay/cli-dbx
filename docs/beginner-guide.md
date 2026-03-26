@@ -46,14 +46,12 @@
 
 ## 3. 用 SQLite 入门最简单
 
-在任意目录创建配置：
+先创建默认配置目录：
 
 ```bash
-mkdir -p ~/.dbx
-cat > ~/.dbx/config.toml <<'EOF'
-default_connection = "local-sqlite"
-
-[connections.local-sqlite]
+mkdir -p ~/.config/dbx
+cat > ~/.config/dbx/local-sqlite.toml <<'EOF'
+[connection]
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
@@ -78,7 +76,7 @@ EOF
 
 ```bash
 ./dbx exec local-sqlite 'select * from users'
-./dbx exec 'select * from users order by id' --page-size 100
+./dbx exec local-sqlite 'select * from users order by id' --page-size 100
 ```
 
 ## 4. 导入一个 CSV
@@ -106,8 +104,8 @@ id,name
 如果结果超过默认 `100` 行，输出里会给 `data.next_cursor`。继续读下一页时，保持同一条 SQL：
 
 ```bash
-./dbx exec 'select * from users order by id'
-./dbx exec 'select * from users order by id' --cursor 100
+./dbx exec local-sqlite 'select * from users order by id'
+./dbx exec local-sqlite 'select * from users order by id' --cursor 100
 ```
 
 ## 5. 如果你用 PostgreSQL 或 MySQL
@@ -115,7 +113,7 @@ id,name
 ### PostgreSQL
 
 ```toml
-[connections.local-pg]
+[connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
 mode = "Lantern"
@@ -130,7 +128,7 @@ export LOCAL_PG_DSN='postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable'
 ### MySQL
 
 ```toml
-[connections.local-mysql]
+[connection]
 engine = "mysql"
 host = "127.0.0.1"
 port = 3306
@@ -151,8 +149,8 @@ export MYSQL_PASSWORD='secret'
 
 确认：
 
-- 配置文件是不是 `~/.dbx/config.toml`
-- `[connections.xxx]` 名字和你传入的连接名是否一致
+- 配置文件是不是 `~/.config/dbx/<name>.toml`
+- 你传入的连接名是不是和文件名一致
 
 ### 模式不允许
 
@@ -169,7 +167,7 @@ export MYSQL_PASSWORD='secret'
 ### SQLite 查不到库
 
 检查 `path` 是不是你预期的文件位置。  
-如果你用相对路径，它是相对于命令执行时的当前目录，不是相对于配置文件目录。
+如果你用相对路径，它是相对于配置文件所在目录，不是相对于命令执行时的当前目录。
 
 ## 7. 推荐学习顺序
 

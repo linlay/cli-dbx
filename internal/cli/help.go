@@ -21,7 +21,7 @@ Flow:
   1. dbx conn test <name>
   2. dbx inspect table <name> <table>
   3. dbx exec <name> 'select ...'
-  Omit <name> to use the default connection.
+  Config files live in ~/.config/dbx/<name>.toml.
 
 Example:
   dbx exec local-pg 'select * from users order by id' --page-size 100
@@ -43,8 +43,8 @@ MySQL: import customers.csv
   dbx import file ./customers.csv local-mysql customers --mode Tweezers
 
 SQLite: continue a paged read
-  dbx exec 'select * from users order by id' --page-size 100
-  dbx exec 'select * from users order by id' --cursor 100
+  dbx exec local-sqlite 'select * from users order by id' --page-size 100
+  dbx exec local-sqlite 'select * from users order by id' --cursor 100
 
 SQLite: export users to csv
   dbx inspect table users
@@ -66,7 +66,7 @@ Commands:
 Examples:
   dbx conn test local-pg
   dbx conn show local-mysql
-  dbx conn test
+  dbx conn list
 
 Next:
   Use inspect or exec.
@@ -85,7 +85,7 @@ Commands:
   connection
 
 Examples:
-  dbx inspect table users
+  dbx inspect table local-pg users
   dbx inspect schema local-pg
   dbx inspect table local-pg users
 
@@ -101,7 +101,6 @@ When to use:
   Run any SQL: read, write, ddl, or admin.
 
 Minimum:
-  '<statement>'
   <conn> '<statement>'
   dsn <engine> <dsn> '<statement>'
   file <conn> <path.sql>
@@ -136,8 +135,8 @@ Mode examples:
   --mode Forge      mixed data + schema work
 
 Examples:
-  dbx exec 'select * from users order by id'
-  dbx exec 'select * from users order by id' --cursor 100
+  dbx exec local-pg 'select * from users order by id'
+  dbx exec local-pg 'select * from users order by id' --cursor 100
   dbx exec local-pg 'select * from users order by id' --page-size 200
   dbx exec dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select now()'
   dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
@@ -154,7 +153,6 @@ When to use:
   Load csv or json rows into a table.
 
 Example:
-  dbx import file ./customers.csv customers --mode Tweezers
   dbx import file ./customers.csv local-mysql customers --mode Tweezers
 
 Next:
@@ -176,7 +174,6 @@ Options:
   --verbose                     include engine, mode, and meta
 
 Example:
-  dbx export table users ./users.csv --format csv
   dbx export table users local-sqlite ./users.csv --format csv
 
 Next:

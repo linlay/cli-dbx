@@ -4,46 +4,154 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestLoadConfigWithSources(t *testing.T) {
-	dir := t.TempDir()
-	secretFile := filepath.Join(dir, "secret.txt")
-	if err := os.WriteFile(secretFile, []byte("file-secret\n"), 0o600); err != nil {
+func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".config", "dbx")
+	if err := os.MkdirAll(filepath.Join(configDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DBX_SECRET", "env-secret")
-	configPath := filepath.Join(dir, "config.toml")
+	secretPath := filepath.Join(configDir, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	raw := `
-default_connection = "mysql1"
-
-[connections.mysql1]
-engine = "mysql"
-host = "127.0.0.1"
-port = 3306
-user = "app"
-database = "zenmind"
-mode = "Lantern"
-password.env = "DBX_SECRET"
-
-[connections.sqlite1]
+[connection]
 engine = "sqlite"
-path = "./test.db"
-password.file = "` + secretFile + `"
+path = "./data/test.db"
+mode = "Lantern"
+password.file = "./secret.txt"
+`
+	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, err := LoadNamed("", "local-sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Path != filepath.Join(configDir, "local-sqlite.toml") {
+		t.Fatalf("profile path = %q", profile.Path)
+	}
+	if profile.Connection.Path != filepath.Join(configDir, "data", "test.db") {
+		t.Fatalf("sqlite path = %q", profile.Connection.Path)
+	}
+	secret, source, err := profile.Connection.Password.Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "file" || secret != "file-secret" {
+		t.Fatalf("unexpected secret resolution: %q / %q", source, secret)
+	}
+}
+
+func TestLoadNamedSupportsExplicitFileAndNameMatch(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "prod-db.toml")
+	raw := `
+[connection]
+engine = "postgres"
+dsn_env = "PROD_DSN"
+mode = "Lantern"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, _, err := Load(configPath)
+
+	profile, err := LoadNamed(configPath, "prod-db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, source, err := cfg.Connections["mysql1"].Password.Resolve(context.Background())
+	if profile.Name != "prod-db" {
+		t.Fatalf("profile name = %q", profile.Name)
+	}
+
+	_, err = LoadNamed(configPath, "other-db")
+	if err == nil || !strings.Contains(err.Error(), `does not match config file`) {
+		t.Fatalf("expected name mismatch error, got %v", err)
+	}
+}
+
+func TestLoadNamedRejectsLegacyFormat(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+default_connection = "local-sqlite"
+
+[connections.local-sqlite]
+engine = "sqlite"
+path = "./demo.db"
+mode = "Lantern"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadNamed(configPath, "config")
+	if err == nil || !strings.Contains(err.Error(), "legacy multi-connection format") {
+		t.Fatalf("expected legacy format error, got %v", err)
+	}
+}
+
+func TestListSortsTomlFilesAndIgnoresOtherFiles(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"zeta.toml": `
+[connection]
+engine = "mysql"
+mode = "Lantern"
+`,
+		"alpha.toml": `
+[connection]
+engine = "sqlite"
+path = "./alpha.db"
+mode = "Lantern"
+`,
+		"notes.txt": "ignore me",
+	}
+	for name, raw := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	profiles, path, err := List(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "env" || secret != "env-secret" {
-		t.Fatalf("unexpected source resolution: %q / %q", source, secret)
+	if path != dir {
+		t.Fatalf("list path = %q", path)
+	}
+	if len(profiles) != 2 {
+		t.Fatalf("expected 2 profiles, got %d", len(profiles))
+	}
+	if profiles[0].Name != "alpha" || profiles[1].Name != "zeta" {
+		t.Fatalf("unexpected order: %#v", profiles)
+	}
+
+	one, path, err := List(filepath.Join(dir, "alpha.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(dir, "alpha.toml") || len(one) != 1 || one[0].Name != "alpha" {
+		t.Fatalf("unexpected single-file list: path=%q profiles=%#v", path, one)
+	}
+}
+
+func TestListReturnsPathInInvalidTomlError(t *testing.T) {
+	dir := t.TempDir()
+	badPath := filepath.Join(dir, "broken.toml")
+	if err := os.WriteFile(badPath, []byte("[connection\nengine = \"sqlite\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := List(dir)
+	if err == nil || !strings.Contains(err.Error(), badPath) {
+		t.Fatalf("expected invalid toml error with path, got %v", err)
 	}
 }

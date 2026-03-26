@@ -75,17 +75,15 @@ GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go build -o ./dbx
 ### 第一步：创建配置目录
 
 ```bash
-mkdir -p ~/.dbx
+mkdir -p ~/.config/dbx
 ```
 
 ### 第二步：写一个最小配置
 
-把下面内容写到 `~/.dbx/config.toml`：
+把下面内容写到 `~/.config/dbx/local-sqlite.toml`：
 
 ```toml
-default_connection = "local-sqlite"
-
-[connections.local-sqlite]
+[connection]
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
@@ -133,7 +131,7 @@ id,name
 ```bash
 ./dbx exec local-sqlite 'select * from users order by id'
 ./dbx exec local-sqlite 'select * from users order by id' --format table
-./dbx exec 'select * from users order by id' --page-size 100
+./dbx exec local-sqlite 'select * from users order by id' --page-size 100
 ./dbx inspect table local-sqlite users
 ```
 
@@ -147,18 +145,16 @@ id,name
 
 ## 5. 配置文件怎么写
 
-默认配置文件位置：
+默认配置目录：
 
 ```bash
-~/.dbx/config.toml
+~/.config/dbx
 ```
 
-最常见的结构是：
+每个连接一个文件。最常见的结构是：
 
 ```toml
-default_connection = "local-pg"
-
-[connections.local-pg]
+[connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
 mode = "Lantern"
@@ -176,7 +172,7 @@ tags = ["dev", "local"]
 ### 写法 1：直接给 DSN
 
 ```toml
-[connections.local-pg]
+[connection]
 engine = "postgres"
 dsn = "postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable"
 mode = "Lantern"
@@ -185,7 +181,7 @@ mode = "Lantern"
 ### 写法 2：结构化字段
 
 ```toml
-[connections.local-mysql]
+[connection]
 engine = "mysql"
 host = "127.0.0.1"
 port = 3306
@@ -198,7 +194,7 @@ mode = "Lantern"
 SQLite 也用同一套 profile：
 
 ```toml
-[connections.local-sqlite]
+[connection]
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
@@ -339,9 +335,9 @@ CLI 结果只保留两种格式：
 继续读取下一页时，把同一条 SQL 和返回的 `next_cursor` 一起传回去：
 
 ```bash
-./dbx exec 'select * from users order by id'
-./dbx exec 'select * from users order by id' --cursor 100
-./dbx exec 'select * from users order by id' --cursor 100 --page-size 200
+./dbx exec local-sqlite 'select * from users order by id'
+./dbx exec local-sqlite 'select * from users order by id' --cursor 100
+./dbx exec local-sqlite 'select * from users order by id' --cursor 100 --page-size 200
 ```
 
 分页时要保持相同的 `order by`，这样每一页的顺序才稳定。
@@ -354,28 +350,18 @@ CLI 结果只保留两种格式：
 例如：
 
 ```bash
-./dbx export table users ./users.csv --format csv
-./dbx export table users ./users.json --format json
+./dbx export table users local-sqlite ./users.csv --format csv
+./dbx export table users local-sqlite ./users.json --format json
 ```
 
 ## 11. 环境变量支持
 
-除了配置文件，也支持环境变量：
-
-- `DBX_DSN`
-- `DBX_ENGINE`
-- `DBX_CONN`
-
-优先级大致是：
-
-1. 命令行显式参数
-2. 环境变量
-3. 配置文件默认连接
+除了配置文件，也支持 `exec dsn` 直接传 DSN：
 
 例如：
 
 ```bash
-DBX_CONN=local-sqlite ./dbx exec 'select 1'
+./dbx exec dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select 1'
 ```
 
 ## 12. 新手常见问题

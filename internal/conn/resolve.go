@@ -37,7 +37,6 @@ type Spec struct {
 
 type ResolveInput struct {
 	ConfigPath string
-	Config     *config.Config
 	Name       string
 	DSN        string
 	Engine     string
@@ -45,15 +44,6 @@ type ResolveInput struct {
 }
 
 func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
-	cfg := in.Config
-	if cfg == nil {
-		var err error
-		cfg, _, err = config.Load(in.ConfigPath)
-		if err != nil {
-			return Spec{}, err
-		}
-	}
-
 	if in.DSN != "" {
 		engine := in.Engine
 		if engine == "" {
@@ -69,74 +59,47 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		return finalize(spec)
 	}
 
-	if envDSN := strings.TrimSpace(os.Getenv("DBX_DSN")); envDSN != "" && in.Name == "" {
-		engine := in.Engine
-		if engine == "" {
-			engine = strings.TrimSpace(os.Getenv("DBX_ENGINE"))
-		}
-		if engine == "" {
-			engine = inferEngine(envDSN)
-		}
-		spec := Spec{
-			Name:    "env",
-			Engine:  engine,
-			DSN:     envDSN,
-			Mode:    mode.MustParse(in.Mode),
-			Timeout: 15 * time.Second,
-		}
-		return finalize(spec)
-	}
-
-	name := in.Name
-	if name == "" {
-		if envName := strings.TrimSpace(os.Getenv("DBX_CONN")); envName != "" {
-			name = envName
-		}
-	}
-	if name == "" {
-		name = cfg.DefaultConnection
-	}
-	if name == "" {
+	if strings.TrimSpace(in.Name) == "" {
 		return Spec{}, fmt.Errorf("no connection selected")
 	}
 
-	profile, ok := cfg.Connections[name]
-	if !ok {
-		return Spec{}, fmt.Errorf("connection %q not found", name)
+	profile, err := config.LoadNamed(in.ConfigPath, in.Name)
+	if err != nil {
+		return Spec{}, err
 	}
 
 	spec := Spec{
-		Name:          name,
-		Engine:        normalizeEngine(profile.Engine),
-		Host:          profile.Host,
-		Port:          profile.Port,
-		User:          profile.User,
-		Database:      profile.Database,
-		Schema:        profile.Schema,
-		Path:          profile.Path,
-		Role:          profile.Role,
-		Tags:          profile.Tags,
-		ReadOnly:      profile.ReadOnly,
-		Timeout:       profile.EffectiveTimeout(),
+		Name:          profile.Name,
+		Engine:        normalizeEngine(profile.Connection.Engine),
+		Host:          profile.Connection.Host,
+		Port:          profile.Connection.Port,
+		User:          profile.Connection.User,
+		Database:      profile.Connection.Database,
+		Schema:        profile.Connection.Schema,
+		Path:          profile.Connection.Path,
+		Role:          profile.Connection.Role,
+		Tags:          profile.Connection.Tags,
+		ReadOnly:      profile.Connection.ReadOnly,
+		Timeout:       profile.Connection.EffectiveTimeout(),
 		SecretSources: map[string]string{},
 	}
 
-	selectedMode := profile.Mode
+	selectedMode := profile.Connection.Mode
 	if in.Mode != "" {
 		selectedMode = in.Mode
 	}
 	spec.Mode = mode.MustParse(selectedMode)
 
-	if profile.DSN != "" {
-		spec.DSN = profile.DSN
+	if profile.Connection.DSN != "" {
+		spec.DSN = profile.Connection.DSN
 		if spec.Engine == "" {
-			spec.Engine = inferEngine(profile.DSN)
+			spec.Engine = inferEngine(profile.Connection.DSN)
 		}
 	}
-	if profile.DSNEnv != "" {
-		value, ok := os.LookupEnv(profile.DSNEnv)
+	if profile.Connection.DSNEnv != "" {
+		value, ok := os.LookupEnv(profile.Connection.DSNEnv)
 		if !ok {
-			return Spec{}, fmt.Errorf("connection %q dsn_env %q is not set", name, profile.DSNEnv)
+			return Spec{}, fmt.Errorf("connection %q dsn_env %q is not set", profile.Name, profile.Connection.DSNEnv)
 		}
 		spec.DSN = value
 		spec.SecretSources["dsn"] = "env"
@@ -146,22 +109,22 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 	}
 
 	if spec.DSN == "" {
-		password, source, err := profile.Password.Resolve(ctx)
+		password, source, err := profile.Connection.Password.Resolve(ctx)
 		if err != nil {
-			return Spec{}, fmt.Errorf("connection %q password: %w", name, err)
+			return Spec{}, fmt.Errorf("connection %q password: %w", profile.Name, err)
 		}
 		if source != "" {
 			spec.SecretSources["password"] = source
 		}
 		switch spec.Engine {
 		case "postgres":
-			spec.DSN = buildPostgresDSN(spec, password, profile.SSLMode)
+			spec.DSN = buildPostgresDSN(spec, password, profile.Connection.SSLMode)
 		case "mysql":
 			spec.DSN = buildMySQLDSN(spec, password)
 		case "sqlite":
 			spec.DSN = buildSQLiteDSN(spec)
 		default:
-			return Spec{}, fmt.Errorf("unsupported engine %q", profile.Engine)
+			return Spec{}, fmt.Errorf("unsupported engine %q", profile.Connection.Engine)
 		}
 	}
 
@@ -249,7 +212,7 @@ func buildMySQLDSN(spec Spec, password string) string {
 }
 
 func buildSQLiteDSN(spec Spec) string {
-	if strings.HasPrefix(spec.Path, "sqlite:") {
+	if strings.HasPrefix(spec.Path, "sqlite:") || strings.HasPrefix(spec.Path, "file:") {
 		return spec.Path
 	}
 	if spec.Path == "" || spec.Path == ":memory:" {

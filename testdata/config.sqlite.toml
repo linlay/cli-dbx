@@ -1,8 +1,5 @@
-default_connection = "local-sqlite"
-
-[connections.local-sqlite]
+[connection]
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
 tags = ["local"]
-

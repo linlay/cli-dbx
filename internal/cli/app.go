@@ -140,23 +140,18 @@ func commonValueFlags() map[string]bool {
 	}
 }
 
-func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine, selectedMode string) (*config.Config, conn.Spec, error) {
-	cfg, _, err := config.Load(configPath)
-	if err != nil {
-		return nil, conn.Spec{}, err
-	}
+func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine, selectedMode string) (conn.Spec, error) {
 	spec, err := conn.Resolve(ctx, conn.ResolveInput{
 		ConfigPath: configPath,
-		Config:     cfg,
 		Name:       name,
 		DSN:        dsn,
 		Engine:     engine,
 		Mode:       selectedMode,
 	})
 	if err != nil {
-		return nil, conn.Spec{}, err
+		return conn.Spec{}, err
 	}
-	return cfg, spec, nil
+	return spec, nil
 }
 
 type execInput struct {
@@ -169,7 +164,7 @@ type execInput struct {
 
 func parseExecInput(args []string) (execInput, error) {
 	if len(args) == 0 {
-		return execInput{}, errors.New("exec requires SQL text, or: exec <conn> <sql>, exec dsn <engine> <dsn> <sql>")
+		return execInput{}, errors.New("exec requires: <conn> <sql>, exec file <conn> <path>, or exec dsn <engine> <dsn> <sql>")
 	}
 	if args[0] == "dsn" {
 		if len(args) < 4 {
@@ -183,8 +178,8 @@ func parseExecInput(args []string) (execInput, error) {
 		}
 		return execInput{name: args[1], file: args[2]}, nil
 	}
-	if len(args) == 1 {
-		return execInput{sql: args[0]}, nil
+	if len(args) < 2 {
+		return execInput{}, errors.New("exec requires: <conn> <sql>, exec file <conn> <path>, or exec dsn <engine> <dsn> <sql>")
 	}
 	return execInput{name: args[0], sql: args[1]}, nil
 }
@@ -193,7 +188,7 @@ func parseInspectInput(kind string, args []string) (string, string, string, erro
 	switch kind {
 	case "schema":
 		if len(args) == 0 {
-			return "", "", "", nil
+			return "", "", "", errors.New("inspect schema requires: <conn> [schema]")
 		}
 		schema := ""
 		if len(args) > 1 {
@@ -201,11 +196,8 @@ func parseInspectInput(kind string, args []string) (string, string, string, erro
 		}
 		return args[0], schema, "", nil
 	case "table":
-		if len(args) == 0 {
-			return "", "", "", errors.New("inspect table requires: <table> or <conn> <table> [schema]")
-		}
-		if len(args) == 1 {
-			return "", "", args[0], nil
+		if len(args) < 2 {
+			return "", "", "", errors.New("inspect table requires: <conn> <table> [schema]")
 		}
 		schema := ""
 		if len(args) > 2 {
@@ -214,7 +206,7 @@ func parseInspectInput(kind string, args []string) (string, string, string, erro
 		return args[0], schema, args[1], nil
 	case "connection":
 		if len(args) == 0 {
-			return "", "", "", nil
+			return "", "", "", errors.New("inspect connection requires: <conn>")
 		}
 		return args[0], "", "", nil
 	default:
@@ -223,21 +215,15 @@ func parseInspectInput(kind string, args []string) (string, string, string, erro
 }
 
 func parseImportInput(args []string) (path, connName, table string, err error) {
-	if len(args) < 3 || args[0] != "file" {
-		return "", "", "", errors.New("import file requires: <path> <table> or <path> <conn> <table>")
-	}
-	if len(args) == 3 {
-		return args[1], "", args[2], nil
+	if len(args) < 4 || args[0] != "file" {
+		return "", "", "", errors.New("import file requires: <path> <conn> <table>")
 	}
 	return args[1], args[2], args[3], nil
 }
 
 func parseExportInput(args []string) (table, connName, out string, err error) {
-	if len(args) < 3 || args[0] != "table" {
-		return "", "", "", errors.New("export table requires: <table> <out> or <table> <conn> <out>")
-	}
-	if len(args) == 3 {
-		return args[1], "", args[2], nil
+	if len(args) < 4 || args[0] != "table" {
+		return "", "", "", errors.New("export table requires: <table> <conn> <out>")
 	}
 	return args[1], args[2], args[3], nil
 }
@@ -261,19 +247,19 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	cfg, path, err := config.Load(flags.configPath)
+	profiles, path, err := config.List(flags.configPath)
 	if err != nil {
 		return a.renderError(flags.format, flags.verbose, conn.Spec{}, "", err)
 	}
 	switch args[0] {
 	case "list":
-		names := make([]map[string]any, 0, len(cfg.Connections))
-		for name, item := range cfg.Connections {
+		names := make([]map[string]any, 0, len(profiles))
+		for _, item := range profiles {
 			names = append(names, map[string]any{
-				"name":   name,
-				"engine": item.Engine,
-				"mode":   item.Mode,
-				"tags":   item.Tags,
+				"name":   item.Name,
+				"engine": item.Connection.Engine,
+				"mode":   item.Connection.Mode,
+				"tags":   item.Connection.Tags,
 			})
 		}
 		return output.PrintEnvelope(flags.format, output.Envelope{
@@ -291,7 +277,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 		if len(rest) > 0 {
 			name = rest[0]
 		}
-		spec, err := conn.Resolve(ctx, conn.ResolveInput{Config: cfg, Name: name})
+		spec, err := conn.Resolve(ctx, conn.ResolveInput{ConfigPath: flags.configPath, Name: name})
 		if err != nil {
 			return a.renderError(flags.format, flags.verbose, conn.Spec{Name: name}, "", err)
 		}
@@ -347,7 +333,7 @@ func (a *App) runExec(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	_, spec, err := a.resolveSpec(ctx, common.configPath, input.name, input.dsn, input.engine, common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, input.name, input.dsn, input.engine, common.mode)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: input.name, Engine: input.engine}, "", err)
 	}
@@ -459,7 +445,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
 	}
@@ -563,7 +549,7 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError("json", *verbose, conn.Spec{}, "", err)
 	}
-	_, spec, err := a.resolveSpec(ctx, *configPath, connName, "", "", *selectedMode)
+	spec, err := a.resolveSpec(ctx, *configPath, connName, "", "", *selectedMode)
 	if err != nil {
 		return a.renderError("json", *verbose, conn.Spec{Name: connName}, "", err)
 	}
@@ -615,7 +601,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", err)
 	}
-	_, spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", err)
 	}
@@ -825,7 +811,7 @@ func classifyErrorCode(err error) string {
 		return "missing_where"
 	case strings.Contains(msg, "cursor must be a non-negative integer"):
 		return "invalid_cursor"
-	case strings.Contains(msg, "exec requires sql text"):
+	case strings.Contains(msg, "exec requires:"):
 		return "missing_sql"
 	default:
 		return "sql_error"
@@ -837,7 +823,7 @@ func hintForCode(code string) string {
 	case "conn_not_found":
 		return "Run dbx conn list or use a valid connection name."
 	case "no_connection":
-		return "Provide a connection name or use: exec dsn <engine> <dsn> <sql>."
+		return "Provide a connection name like dbx exec <conn> '<sql>' or use exec dsn <engine> <dsn> <sql>."
 	case "multiple_statements_blocked":
 		return "Split the SQL into one statement per exec call."
 	case "unknown_statement":

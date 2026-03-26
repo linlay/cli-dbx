@@ -8,20 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-const (
-	defaultConfigDir  = ".dbx"
-	defaultConfigFile = "config.toml"
-)
+const defaultConfigDir = ".config/dbx"
 
-type Config struct {
-	DefaultConnection string                      `toml:"default_connection"`
-	Connections       map[string]ConnectionConfig `toml:"connections"`
+type Profile struct {
+	Name       string
+	Path       string
+	Connection ConnectionConfig
+}
+
+type fileConfig struct {
+	Connection ConnectionConfig `toml:"connection"`
 }
 
 type ConnectionConfig struct {
@@ -94,26 +97,77 @@ func (v *ValueSource) UnmarshalTOML(input any) error {
 	}
 }
 
-func Load(path string) (*Config, string, error) {
-	configPath, err := resolvePath(path)
+func List(path string) ([]Profile, string, error) {
+	resolvedPath, err := resolvePath(path)
 	if err != nil {
 		return nil, "", err
 	}
-	buf, err := os.ReadFile(configPath)
+	kind, exists, err := detectPathKind(resolvedPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if kind == pathKindFile {
+		profile, err := loadFile(resolvedPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return []Profile{profile}, resolvedPath, nil
+	}
+	if !exists {
+		return []Profile{}, resolvedPath, nil
+	}
+	entries, err := os.ReadDir(resolvedPath)
+	if err != nil {
+		return nil, "", err
+	}
+	profiles := make([]Profile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" {
+			continue
+		}
+		profile, err := loadFile(filepath.Join(resolvedPath, entry.Name()))
+		if err != nil {
+			return nil, "", err
+		}
+		profiles = append(profiles, profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
+	return profiles, resolvedPath, nil
+}
+
+func LoadNamed(path, name string) (Profile, error) {
+	if strings.TrimSpace(name) == "" {
+		return Profile{}, fmt.Errorf("no connection selected")
+	}
+	resolvedPath, err := resolvePath(path)
+	if err != nil {
+		return Profile{}, err
+	}
+	kind, _, err := detectPathKind(resolvedPath)
+	if err != nil {
+		return Profile{}, err
+	}
+	if kind == pathKindFile {
+		profile, err := loadFile(resolvedPath)
+		if err != nil {
+			return Profile{}, err
+		}
+		if profile.Name != name {
+			return Profile{}, fmt.Errorf("connection %q does not match config file %q; expected %q", name, resolvedPath, profile.Name)
+		}
+		return profile, nil
+	}
+	configFile := filepath.Join(resolvedPath, name+".toml")
+	profile, err := loadFile(configFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &Config{Connections: map[string]ConnectionConfig{}}, configPath, nil
+			return Profile{}, fmt.Errorf("connection %q not found; expected %s", name, configFile)
 		}
-		return nil, "", err
+		return Profile{}, err
 	}
-	var cfg Config
-	if _, err := toml.Decode(string(buf), &cfg); err != nil {
-		return nil, "", err
-	}
-	if cfg.Connections == nil {
-		cfg.Connections = map[string]ConnectionConfig{}
-	}
-	return &cfg, configPath, nil
+	return profile, nil
 }
 
 func resolvePath(path string) (string, error) {
@@ -124,7 +178,7 @@ func resolvePath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, defaultConfigDir, defaultConfigFile), nil
+	return filepath.Join(home, defaultConfigDir), nil
 }
 
 func expandHome(path string) (string, error) {
@@ -188,4 +242,92 @@ func (v ValueSource) Resolve(ctx context.Context) (string, string, error) {
 		return strings.TrimRight(stdout.String(), "\r\n"), "cmd", nil
 	}
 	return "", "", nil
+}
+
+const (
+	pathKindFile = "file"
+	pathKindDir  = "dir"
+)
+
+func detectPathKind(path string) (string, bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return pathKindDir, true, nil
+		}
+		return pathKindFile, true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	if filepath.Ext(path) == ".toml" {
+		return pathKindFile, false, nil
+	}
+	return pathKindDir, false, nil
+}
+
+func loadFile(path string) (Profile, error) {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return Profile{}, err
+	}
+	var doc map[string]any
+	if _, err := toml.Decode(string(buf), &doc); err != nil {
+		return Profile{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if _, ok := doc["default_connection"]; ok {
+		return Profile{}, legacyFormatError(path)
+	}
+	if _, ok := doc["connections"]; ok {
+		return Profile{}, legacyFormatError(path)
+	}
+	if _, ok := doc["connection"]; !ok {
+		return Profile{}, fmt.Errorf("%s must define a [connection] table; use ~/.config/dbx/<name>.toml", path)
+	}
+	var cfg fileConfig
+	if _, err := toml.Decode(string(buf), &cfg); err != nil {
+		return Profile{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := cfg.Connection.normalizePaths(filepath.Dir(path)); err != nil {
+		return Profile{}, err
+	}
+	return Profile{
+		Name:       strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+		Path:       path,
+		Connection: cfg.Connection,
+	}, nil
+}
+
+func legacyFormatError(path string) error {
+	return fmt.Errorf("%s uses the legacy multi-connection format; use ~/.config/dbx/<name>.toml with a [connection] table", path)
+}
+
+func (c *ConnectionConfig) normalizePaths(baseDir string) error {
+	var err error
+	c.Path, err = resolveResourcePath(baseDir, c.Path, true)
+	if err != nil {
+		return err
+	}
+	c.Password.File, err = resolveResourcePath(baseDir, c.Password.File, false)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func resolveResourcePath(baseDir, value string, allowSQLiteSpecial bool) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if allowSQLiteSpecial && (value == ":memory:" || strings.HasPrefix(value, "sqlite:") || strings.HasPrefix(value, "file:")) {
+		return value, nil
+	}
+	expanded, err := expandHome(value)
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(expanded) {
+		return expanded, nil
+	}
+	return filepath.Clean(filepath.Join(baseDir, expanded)), nil
 }
