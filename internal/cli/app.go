@@ -13,13 +13,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/linlay/dbx/internal/audit"
-	"github.com/linlay/dbx/internal/config"
-	"github.com/linlay/dbx/internal/conn"
-	"github.com/linlay/dbx/internal/db"
-	"github.com/linlay/dbx/internal/mode"
-	"github.com/linlay/dbx/internal/output"
-	"github.com/linlay/dbx/internal/sqlanalyzer"
+	"github.com/linlay/cli-dbx/internal/audit"
+	"github.com/linlay/cli-dbx/internal/config"
+	"github.com/linlay/cli-dbx/internal/conn"
+	"github.com/linlay/cli-dbx/internal/db"
+	"github.com/linlay/cli-dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/output"
+	"github.com/linlay/cli-dbx/internal/sqlanalyzer"
 )
 
 type App struct{}
@@ -49,6 +49,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runExport(ctx, args[1:])
 	case "import":
 		return a.runImport(ctx, args[1:])
+	case "version", "--version":
+		return printVersion()
 	case "help", "--help", "-h":
 		topic := ""
 		if len(args) > 1 {

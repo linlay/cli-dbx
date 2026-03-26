@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/linlay/dbx/internal/conn"
-	"github.com/linlay/dbx/internal/db"
-	"github.com/linlay/dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/conn"
+	"github.com/linlay/cli-dbx/internal/db"
+	"github.com/linlay/cli-dbx/internal/mode"
 )
 
 type Envelope struct {

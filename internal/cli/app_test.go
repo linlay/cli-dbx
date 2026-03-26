@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/linlay/cli-dbx/internal/buildinfo"
 	_ "modernc.org/sqlite"
 )
 
@@ -20,6 +21,9 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	})
 	if !strings.Contains(root, "dbx exec local-pg 'select * from users order by id' --page-size 100") {
 		t.Fatalf("root help should point to exec usage, got:\n%s", root)
+	}
+	if !strings.Contains(root, "version   show build version") || !strings.Contains(root, "dbx version") {
+		t.Fatalf("root help should include version command, got:\n%s", root)
 	}
 	if strings.Contains(root, "self-describing") || strings.Contains(root, "external docs") {
 		t.Fatalf("root help should omit design commentary, got:\n%s", root)
@@ -63,6 +67,41 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	})
 	if !strings.Contains(inspectHelp, "inspect table") {
 		t.Fatalf("inspect help should describe table inspection, got:\n%s", inspectHelp)
+	}
+
+	versionHelp := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"help", "version"})
+	})
+	if !strings.Contains(versionHelp, "dbx --version") {
+		t.Fatalf("version help should describe version flag, got:\n%s", versionHelp)
+	}
+}
+
+func TestVersionOutputsEmbeddedBuildInfo(t *testing.T) {
+	oldVersion := buildinfo.Version
+	oldCommit := buildinfo.Commit
+	oldBuildTime := buildinfo.BuildTime
+	buildinfo.Version = "v0.1.0"
+	buildinfo.Commit = "abc1234"
+	buildinfo.BuildTime = "2026-03-25T12:00:00Z"
+	t.Cleanup(func() {
+		buildinfo.Version = oldVersion
+		buildinfo.Commit = oldCommit
+		buildinfo.BuildTime = oldBuildTime
+	})
+
+	versionOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"version"})
+	})
+	if strings.TrimSpace(versionOut) != "dbx v0.1.0 (commit abc1234, built 2026-03-25T12:00:00Z)" {
+		t.Fatalf("unexpected version output: %q", versionOut)
+	}
+
+	flagOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"--version"})
+	})
+	if strings.TrimSpace(flagOut) != "dbx v0.1.0 (commit abc1234, built 2026-03-25T12:00:00Z)" {
+		t.Fatalf("unexpected --version output: %q", flagOut)
 	}
 }
 
@@ -241,11 +280,10 @@ func TestSQLErrorIncludesDriverReasonByDefault(t *testing.T) {
 
 func TestImportUsesDefaultConnectionWhenConnIsOmitted(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 0)
-	cwd, err := os.Getwd()
-	if err != nil {
+	csvPath := filepath.Join(t.TempDir(), "users.csv")
+	if err := os.WriteFile(csvPath, []byte("id,name\n1,Ada\n2,Linus\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	csvPath := filepath.Join(filepath.Dir(filepath.Dir(cwd)), "users.csv")
 	out := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "users"})
 	})

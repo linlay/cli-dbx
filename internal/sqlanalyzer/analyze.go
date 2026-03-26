@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/linlay/dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/mode"
 )
 
 type Analysis struct {

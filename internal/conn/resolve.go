@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linlay/dbx/internal/config"
-	"github.com/linlay/dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/config"
+	"github.com/linlay/cli-dbx/internal/mode"
 )
 
 type Spec struct {

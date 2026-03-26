@@ -21,7 +21,26 @@
 - CLI 输出格式：`json`、`table`
 - 导出文件格式：`csv`、`json`
 
-## 2. 先编译
+## 2. 安装 / 下载
+
+如果你是普通使用者，优先从 GitHub Releases 下载对应平台压缩包：
+
+- macOS Apple Silicon：`dbx_vX.Y.Z_darwin_arm64.tar.gz`
+- macOS Intel：`dbx_vX.Y.Z_darwin_amd64.tar.gz`
+- Linux ARM64：`dbx_vX.Y.Z_linux_arm64.tar.gz`
+- Linux AMD64：`dbx_vX.Y.Z_linux_amd64.tar.gz`
+
+解压后可以先确认版本信息：
+
+```bash
+tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
+./dbx version
+./dbx --version
+```
+
+如果你想从源码自行编译，再看下面这节。
+
+## 3. 先编译
 
 如果你已经装好了 Go，可以直接在仓库根目录运行：
 
@@ -42,7 +61,14 @@ GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go test ./...
 GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go build -o ./dbx ./cmd/dbx
 ```
 
-## 3. 5 分钟跑起来
+如果你只想查看当前构建嵌入的版本信息：
+
+```bash
+./dbx version
+./dbx --version
+```
+
+## 4. 5 分钟跑起来
 
 最简单的体验方式是先用 SQLite。
 
@@ -68,8 +94,8 @@ tags = ["local"]
 
 也可以直接参考现成示例：
 
-- [config.example.toml](/Users/linlay/Server/zenmind/testdata/config.example.toml)
-- [config.sqlite.toml](/Users/linlay/Server/zenmind/testdata/config.sqlite.toml)
+- [config.example.toml](./testdata/config.example.toml)
+- [config.sqlite.toml](./testdata/config.sqlite.toml)
 
 ### 第三步：测试连接
 
@@ -119,7 +145,7 @@ id,name
 ./dbx export table users local-sqlite users-export.csv --format csv
 ```
 
-## 4. 配置文件怎么写
+## 5. 配置文件怎么写
 
 默认配置文件位置：
 
@@ -178,7 +204,7 @@ path = "./demo.db"
 mode = "Lantern"
 ```
 
-## 5. 密码怎么放
+## 6. 密码怎么放
 
 推荐顺序：
 
@@ -211,7 +237,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 - `dbx` 只会读取标准输出
 - 命令失败会直接报错
 
-## 6. 模式怎么选
+## 7. 模式怎么选
 
 如果你把模式理解成“安全开关”，就很容易上手。
 
@@ -232,7 +258,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 
 高风险动作要通过更高的 `mode` 来表达意图，比如建表用 `Chisel`。
 
-## 7. 最常用命令
+## 8. 最常用命令
 
 ### 看有哪些连接
 
@@ -289,7 +315,7 @@ password.cmd = ["printenv", "MYSQL_PASSWORD"]
 ./dbx export table users local-sqlite ./users.csv --format csv
 ```
 
-## 8. 结果格式和分页
+## 9. 结果格式和分页
 
 CLI 结果只保留两种格式：
 
@@ -320,7 +346,7 @@ CLI 结果只保留两种格式：
 
 分页时要保持相同的 `order by`，这样每一页的顺序才稳定。
 
-## 9. 导出文件格式
+## 10. 导出文件格式
 
 - `csv`：默认导出格式
 - `json`：结构化导出格式
@@ -332,7 +358,7 @@ CLI 结果只保留两种格式：
 ./dbx export table users ./users.json --format json
 ```
 
-## 10. 环境变量支持
+## 11. 环境变量支持
 
 除了配置文件，也支持环境变量：
 
@@ -352,7 +378,7 @@ CLI 结果只保留两种格式：
 DBX_CONN=local-sqlite ./dbx exec 'select 1'
 ```
 
-## 11. 新手常见问题
+## 12. 新手常见问题
 
 ### 为什么提示 mode 不允许？
 
@@ -376,8 +402,63 @@ DBX_CONN=local-sqlite ./dbx exec 'select 1'
 - `password.cmd` 是否写成了数组
 - 文件路径是否正确
 
-## 12. 进一步阅读
+## 13. 手工发布 v0.1.0
 
-- [Beginner Guide](/Users/linlay/Server/zenmind/docs/beginner-guide.md)
-- [config.example.toml](/Users/linlay/Server/zenmind/testdata/config.example.toml)
-- [config.sqlite.toml](/Users/linlay/Server/zenmind/testdata/config.sqlite.toml)
+首个版本建议按 Git tag 作为正式版本号来源，例如 `v0.1.0`。
+
+1. 确认代码和文档已经提交完成。
+2. 运行测试：
+
+```bash
+go test ./...
+```
+
+3. 创建并推送 tag：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+4. 在 tag 对应提交上本地打包：
+
+```bash
+scripts/release/build.sh v0.1.0
+```
+
+如果网络不稳定，可以像编译时一样显式带上代理环境变量：
+
+```bash
+GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn scripts/release/build.sh v0.1.0
+```
+
+打包完成后会生成：
+
+- `dist/v0.1.0/dbx_v0.1.0_darwin_amd64.tar.gz`
+- `dist/v0.1.0/dbx_v0.1.0_darwin_arm64.tar.gz`
+- `dist/v0.1.0/dbx_v0.1.0_linux_amd64.tar.gz`
+- `dist/v0.1.0/dbx_v0.1.0_linux_arm64.tar.gz`
+- `dist/v0.1.0/dbx_v0.1.0_checksums.txt`
+
+5. 校验压缩包摘要：
+
+```bash
+cd dist/v0.1.0
+shasum -a 256 -c dbx_v0.1.0_checksums.txt
+```
+
+6. 在 GitHub 创建 `v0.1.0` Release，并手动上传这 5 个文件。
+
+建议 Release 正文至少包含：
+
+- 版本亮点摘要
+- 支持的平台：macOS/Linux, amd64/arm64
+- `checksums` 文件可用于下载后校验
+
+如果准备公开发布，建议在首发前补上 `LICENSE` 文件，打包脚本会在存在时自动把它放进压缩包。
+
+## 14. 进一步阅读
+
+- [Beginner Guide](./docs/beginner-guide.md)
+- [config.example.toml](./testdata/config.example.toml)
+- [config.sqlite.toml](./testdata/config.sqlite.toml)

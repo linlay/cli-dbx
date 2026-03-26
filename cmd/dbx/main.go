@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/linlay/dbx/internal/cli"
+	"github.com/linlay/cli-dbx/internal/cli"
 )
 
 func main() {

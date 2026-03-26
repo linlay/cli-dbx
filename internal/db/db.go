@@ -13,7 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
-	"github.com/linlay/dbx/internal/conn"
+	"github.com/linlay/cli-dbx/internal/conn"
 )
 
 type Column struct {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/linlay/dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/mode"
 )
 
 func Classify(sql string) mode.StatementClass {

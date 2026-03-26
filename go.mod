@@ -1,4 +1,4 @@
-module github.com/linlay/dbx
+module github.com/linlay/cli-dbx
 
 go 1.22
 

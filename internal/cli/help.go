@@ -1,6 +1,10 @@
 package cli
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/linlay/cli-dbx/internal/buildinfo"
+)
 
 func rootHelp() string {
 	return `dbx
@@ -11,6 +15,7 @@ Use:
   exec      run any SQL
   import    load csv/json into a table
   export    write a table to a file
+  version   show build version
 
 Flow:
   1. dbx conn test <name>
@@ -20,6 +25,7 @@ Flow:
 
 Example:
   dbx exec local-pg 'select * from users order by id' --page-size 100
+  dbx version
 `
 }
 
@@ -178,6 +184,18 @@ Next:
 `
 }
 
+func versionHelp() string {
+	return `dbx version
+
+When to use:
+  Show the embedded version, commit, and build time.
+
+Examples:
+  dbx version
+  dbx --version
+`
+}
+
 func printHelp(topic string) error {
 	switch topic {
 	case "", "root":
@@ -194,8 +212,15 @@ func printHelp(topic string) error {
 		fmt.Print(importHelp())
 	case "export":
 		fmt.Print(exportHelp())
+	case "version":
+		fmt.Print(versionHelp())
 	default:
 		return fmt.Errorf("unknown help topic %q", topic)
 	}
+	return nil
+}
+
+func printVersion() error {
+	fmt.Println(buildinfo.Summary())
 	return nil
 }
