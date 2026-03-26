@@ -58,6 +58,9 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	if strings.Contains(queryHelp, "--require-ack") || strings.Contains(queryHelp, "--verbose-errors") || strings.Contains(queryHelp, "sampled by default") {
 		t.Fatalf("query help should not mention removed flags or sampling, got:\n%s", queryHelp)
 	}
+	if strings.Contains(queryHelp, "--mode") {
+		t.Fatalf("query help should not mention removed mode flag, got:\n%s", queryHelp)
+	}
 	if strings.Contains(queryHelp, "Common next actions") || strings.Contains(queryHelp, "agent-first") {
 		t.Fatalf("query help should omit design sections, got:\n%s", queryHelp)
 	}
@@ -249,9 +252,12 @@ func TestQueryVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	if _, ok := meta["allow_actions"]; !ok {
 		t.Fatalf("verbose meta should include allow_actions: %#v", verbosePayload)
 	}
+	if _, ok := verbosePayload["mode"]; ok {
+		t.Fatalf("verbose output should not include mode: %#v", verbosePayload)
+	}
 
 	errOut := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"update", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "delete from users"})
+		err := New().Run(context.Background(), []string{"update", "--config", configPath, "local-sqlite", "delete from users"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -270,17 +276,16 @@ func TestQueryVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	}
 }
 
-func TestActionCommandsParseFlagsAfterPositionals(t *testing.T) {
+func TestRemovedModeFlagIsRejected(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
-	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"update", "--config", configPath, "local-sqlite", "update users set name = 'aaa' where id = 1", "--mode", "Tweezers"})
-	})
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(out), &payload); err != nil {
-		t.Fatalf("unmarshal output: %v\n%s", err, out)
-	}
-	if payload["kind"] != "write_result" {
-		t.Fatalf("expected trailing --mode to be parsed, got %#v", payload)
+	for _, args := range [][]string{
+		{"update", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "update users set name = 'aaa' where id = 1"},
+		{"update", "--config", configPath, "local-sqlite", "update users set name = 'aaa' where id = 1", "--mode", "Tweezers"},
+	} {
+		err := New().Run(context.Background(), args)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -mode") {
+			t.Fatalf("expected removed --mode flag error, got %v", err)
+		}
 	}
 }
 
@@ -304,7 +309,7 @@ func TestQueryBlocksMultiStatementButAllowsScopedWriteWithoutAck(t *testing.T) {
 	}
 
 	writeOut := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"update", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "update users set name = 'x' where id = 1"})
+		return New().Run(context.Background(), []string{"update", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"})
 	})
 	var writePayload map[string]any
 	if err := json.Unmarshal([]byte(writeOut), &writePayload); err != nil {
@@ -322,7 +327,7 @@ func TestSQLErrorIncludesDriverReasonByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "local-sqlite", "users"})
+		err := New().Run(context.Background(), []string{"import", "--config", configPath, "file", csvPath, "local-sqlite", "users"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -349,7 +354,7 @@ func TestImportRequiresExplicitConnectionName(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"import", "--config", configPath, "--mode", "Tweezers", "file", csvPath, "users"})
+		err := New().Run(context.Background(), []string{"import", "--config", configPath, "file", csvPath, "users"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -457,13 +462,13 @@ func TestConnListScansDirectoryInStableOrder(t *testing.T) {
 		"zeta.toml": `
 [connection]
 engine = "mysql"
-mode = "Lantern"
+allow_actions = ["query"]
 `,
 		"alpha.toml": `
 [connection]
 engine = "sqlite"
 path = "./alpha.db"
-mode = "Lantern"
+allow_actions = ["query"]
 `,
 		"notes.txt": "ignore me",
 	} {
@@ -517,7 +522,7 @@ func TestSQLCommandIsUnknown(t *testing.T) {
 }
 
 func TestAllowActionsBlocksWriteCommandsButKeepsQuery(t *testing.T) {
-	configPath := makeSQLiteFixtureWithExtras(t, 3, "mode = \"Forge\"\nallow_actions = [\"query\"]\n")
+	configPath := makeSQLiteFixtureWithExtras(t, 3, "allow_actions = [\"query\"]\n")
 
 	queryOut := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id from users order by id"})
@@ -553,7 +558,7 @@ func TestAllowActionsBlocksWriteCommandsButKeepsQuery(t *testing.T) {
 }
 
 func TestActionCommandsRejectMismatchedSQL(t *testing.T) {
-	configPath := makeSQLiteFixtureWithExtras(t, 3, "mode = \"Forge\"\nallow_actions = [\"query\", \"update\", \"schema\"]\n")
+	configPath := makeSQLiteFixtureWithExtras(t, 3, "allow_actions = [\"query\", \"update\", \"schema\"]\n")
 
 	for _, tc := range []struct {
 		args   []string
@@ -581,7 +586,7 @@ func TestActionCommandsRejectMismatchedSQL(t *testing.T) {
 }
 
 func TestTxRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
-	configPath := makeSQLiteFixtureWithExtras(t, 2, "mode = \"Tweezers\"\nallow_actions = [\"query\", \"update\"]\n")
+	configPath := makeSQLiteFixtureWithExtras(t, 2, "allow_actions = [\"query\", \"update\"]\n")
 	dir := t.TempDir()
 	failingPlanPath := filepath.Join(dir, "failing-plan.json")
 	failingPlan := `{"steps":[{"action":"update","sql":"update users set name = 'changed' where id = 1"},{"action":"update","sql":"update users set name = 'bad'"}]}`
@@ -705,18 +710,14 @@ func makeSQLiteFixtureWithExtras(t *testing.T, rows int, extras string) string {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	modeLine := `mode = "Lantern"`
-	if strings.Contains(extras, `mode = "`) {
-		modeLine = ""
-	}
 	raw := fmt.Sprintf(`
 [connection]
 engine = "sqlite"
 path = "%s"
-%s
+allow_actions = ["query", "update", "schema"]
 tags = ["local"]
 %s
-`, dbPath, modeLine, extras)
+`, dbPath, extras)
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -759,7 +760,7 @@ func makeSQLiteRelationFixture(t *testing.T) string {
 [connection]
 engine = "sqlite"
 path = "` + dbPath + `"
-mode = "Lantern"
+allow_actions = ["query"]
 tags = ["local"]
 `
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {

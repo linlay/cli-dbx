@@ -24,7 +24,7 @@ func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
 [connection]
 engine = "sqlite"
 path = "./data/test.db"
-mode = "Lantern"
+allow_actions = ["query"]
 password.file = "./secret.txt"
 `
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
@@ -57,7 +57,7 @@ func TestLoadNamedSupportsExplicitFileAndNameMatch(t *testing.T) {
 [connection]
 engine = "postgres"
 dsn_env = "PROD_DSN"
-mode = "Lantern"
+allow_actions = ["query"]
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,6 @@ default_connection = "local-sqlite"
 [connections.local-sqlite]
 engine = "sqlite"
 path = "./demo.db"
-mode = "Lantern"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -104,13 +103,13 @@ func TestListSortsTomlFilesAndIgnoresOtherFiles(t *testing.T) {
 		"zeta.toml": `
 [connection]
 engine = "mysql"
-mode = "Lantern"
+allow_actions = ["query"]
 `,
 		"alpha.toml": `
 [connection]
 engine = "sqlite"
 path = "./alpha.db"
-mode = "Lantern"
+allow_actions = ["query"]
 `,
 		"notes.txt": "ignore me",
 	}
@@ -153,5 +152,43 @@ func TestListReturnsPathInInvalidTomlError(t *testing.T) {
 	_, _, err := List(dir)
 	if err == nil || !strings.Contains(err.Error(), badPath) {
 		t.Fatalf("expected invalid toml error with path, got %v", err)
+	}
+}
+
+func TestLoadNamedRejectsRemovedMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "legacy.toml")
+	raw := `
+[connection]
+engine = "sqlite"
+path = "./demo.db"
+mode = "Lantern"
+allow_actions = ["query"]
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadNamed(configPath, "legacy")
+	if err == nil || !strings.Contains(err.Error(), "mode has been removed; use allow_actions = [...]") {
+		t.Fatalf("expected removed mode error, got %v", err)
+	}
+}
+
+func TestLoadNamedRequiresAllowActions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "missing-actions.toml")
+	raw := `
+[connection]
+engine = "sqlite"
+path = "./demo.db"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadNamed(configPath, "missing-actions")
+	if err == nil || !strings.Contains(err.Error(), "connection.allow_actions is required") {
+		t.Fatalf("expected missing allow_actions error, got %v", err)
 	}
 }

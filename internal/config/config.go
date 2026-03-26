@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/linlay/cli-dbx/internal/action"
 )
 
 const defaultConfigDir = ".config/dbx"
@@ -42,7 +43,6 @@ type ConnectionConfig struct {
 	ReadOnly     bool        `toml:"readonly"`
 	Timeout      string      `toml:"timeout"`
 	Role         string      `toml:"role"`
-	Mode         string      `toml:"mode"`
 	Tags         []string    `toml:"tags"`
 	AllowActions []string    `toml:"allow_actions"`
 }
@@ -285,6 +285,13 @@ func loadFile(path string) (Profile, error) {
 	if _, ok := doc["connection"]; !ok {
 		return Profile{}, fmt.Errorf("%s must define a [connection] table; use ~/.config/dbx/<name>.toml", path)
 	}
+	connDoc, ok := doc["connection"].(map[string]any)
+	if !ok {
+		return Profile{}, fmt.Errorf("%s must define a [connection] table; use ~/.config/dbx/<name>.toml", path)
+	}
+	if _, ok := connDoc["mode"]; ok {
+		return Profile{}, fmt.Errorf("%s: mode has been removed; use allow_actions = [...]", path)
+	}
 	var cfg fileConfig
 	if _, err := toml.Decode(string(buf), &cfg); err != nil {
 		return Profile{}, fmt.Errorf("%s: %w", path, err)
@@ -292,6 +299,14 @@ func loadFile(path string) (Profile, error) {
 	if err := cfg.Connection.normalizePaths(filepath.Dir(path)); err != nil {
 		return Profile{}, err
 	}
+	if len(cfg.Connection.AllowActions) == 0 {
+		return Profile{}, fmt.Errorf("%s: connection.allow_actions is required", path)
+	}
+	actions, err := action.ParseList(cfg.Connection.AllowActions)
+	if err != nil {
+		return Profile{}, fmt.Errorf("%s: connection allow_actions: %w", path, err)
+	}
+	cfg.Connection.AllowActions = action.Strings(actions)
 	return Profile{
 		Name:       strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
 		Path:       path,

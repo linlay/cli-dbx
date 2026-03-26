@@ -38,8 +38,7 @@ mkdir -p ~/.config/dbx
 [connection]
 engine = "sqlite"
 path = "./demo.db"
-mode = "Lantern"
-allow_actions = ["query"]
+allow_actions = ["query", "update", "schema"]
 tags = ["local"]
 ```
 
@@ -48,8 +47,8 @@ tags = ["local"]
 ```bash
 ./dbx conn list
 ./dbx conn test local-sqlite
-./dbx schema local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
-./dbx import file ./users.csv local-sqlite users --mode Tweezers
+./dbx schema local-sqlite 'create table users (id integer primary key, name text)'
+./dbx import file ./users.csv local-sqlite users
 ./dbx query local-sqlite 'select * from users order by id'
 ./dbx inspect table local-sqlite users
 ./dbx export table users local-sqlite ./users-export.csv --format csv
@@ -59,8 +58,8 @@ tags = ["local"]
 
 ```bash
 ./dbx query local-sqlite 'select * from users'
-./dbx update local-sqlite 'update users set name = "Ada" where id = 1' --mode Tweezers
-./dbx schema local-sqlite 'alter table users add column email text' --mode Chisel
+./dbx update local-sqlite 'update users set name = "Ada" where id = 1'
+./dbx schema local-sqlite 'alter table users add column email text'
 ./dbx query file local-sqlite ./query.sql
 ./dbx query dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select 1'
 ```
@@ -104,7 +103,6 @@ tags = ["local"]
 [connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
-mode = "Lantern"
 allow_actions = ["query"]
 tags = ["dev", "local"]
 ```
@@ -119,7 +117,6 @@ port = 3306
 user = "app"
 database = "appdb"
 password.env = "MYSQL_PASSWORD"
-mode = "Lantern"
 allow_actions = ["query"]
 ```
 
@@ -132,10 +129,10 @@ allow_actions = ["query"]
 
 操作层面可以先这样理解：
 
-- `mode` 控制默认风险等级
 - `allow_actions` 控制这个连接允许哪些命令动作
+- 推荐显式写出最小权限集合，不依赖隐式默认值
 
-如果你要理解 `mode` 和 `allow_actions` 的关系、为什么 `tx` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
+如果你要理解 `allow_actions` 和为什么 `tx` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
 
 也可以直接参考：
 
@@ -196,7 +193,7 @@ go test ./...
 ### 常见排查
 
 - 连接不存在：确认配置文件名和连接名一致
-- 动作不允许：检查 `mode` 和 `allow_actions`
+- 动作不允许：检查 `allow_actions`
 - 密码没读到：检查 `password.env`、`password.file`、`password.cmd`
 - SQLite 路径不对：相对路径是相对于配置文件目录，不是当前工作目录
 

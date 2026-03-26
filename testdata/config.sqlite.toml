@@ -1,5 +1,5 @@
 [connection]
 engine = "sqlite"
 path = "./demo.db"
-mode = "Lantern"
+allow_actions = ["query"]
 tags = ["local"]

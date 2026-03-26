@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/linlay/cli-dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/sqlclass"
 )
 
 type Action string
@@ -57,35 +57,18 @@ func Strings(actions []Action) []string {
 	return out
 }
 
-func FromClass(class mode.StatementClass) Action {
+func FromClass(class sqlclass.StatementClass) Action {
 	switch class {
-	case mode.ClassRead:
+	case sqlclass.ClassRead:
 		return Query
-	case mode.ClassWriteData:
+	case sqlclass.ClassWriteData:
 		return Update
-	case mode.ClassDDL:
+	case sqlclass.ClassDDL:
 		return Schema
-	case mode.ClassAdmin:
+	case sqlclass.ClassAdmin:
 		return Admin
 	default:
 		return ""
-	}
-}
-
-func DefaultsForMode(m mode.Mode) []Action {
-	switch m {
-	case mode.Lantern:
-		return []Action{Query}
-	case mode.Tweezers:
-		return []Action{Query, Update}
-	case mode.Chisel:
-		return []Action{Query, Schema}
-	case mode.Forge:
-		return []Action{Query, Update, Schema}
-	case mode.Crown, mode.Wildfire:
-		return []Action{Query, Update, Schema, Admin}
-	default:
-		return nil
 	}
 }
 

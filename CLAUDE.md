@@ -44,7 +44,7 @@
 - `internal/conn`
   把配置解析成可执行的连接规格 `Spec`。
 - `internal/action`
-  动作模型：`query / update / schema / admin`，以及 mode 到动作的默认映射。
+  动作模型：`query / update / schema / admin`。
 - `internal/sqlclass` / `internal/sqlanalyzer`
   SQL 分类、单语句校验、危险写入检测。
 - `internal/db`
@@ -91,7 +91,6 @@
 ```toml
 [connection]
 engine = "postgres|mysql|sqlite"
-mode = "Lantern|Tweezers|Chisel|Forge|Crown|Wildfire"
 allow_actions = ["query", "update", "schema", "admin"]
 ```
 
@@ -107,14 +106,6 @@ allow_actions = ["query", "update", "schema", "admin"]
   DDL，如 `create / alter / drop / truncate / rename`
 - `admin`
   管理动作，如 `grant / revoke / set / vacuum`
-
-### 默认映射
-
-- `Lantern -> [query]`
-- `Tweezers -> [query, update]`
-- `Chisel -> [query, schema]`
-- `Forge -> [query, update, schema]`
-- `Crown / Wildfire -> [query, update, schema, admin]`
 
 ### 事务计划
 

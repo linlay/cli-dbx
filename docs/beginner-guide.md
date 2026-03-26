@@ -32,19 +32,14 @@
 ./dbx query local-sqlite 'select 1'
 ```
 
-### mode
+### allow_actions
 
-`mode` 决定你可以做什么。
+`allow_actions` 决定这个连接允许做什么。
 
-- 只查数据：`Lantern`
-- 改数据：`Tweezers`
-- 改表：`Chisel`
-
-如果你刚开始用，记一个规则就够了：
-
-- 查数据用 `Lantern`
-- 导入数据用 `Tweezers`
-- 建表改字段用 `Chisel`
+- 只查数据：`["query"]`
+- 改数据：`["query", "update"]`
+- 改表：`["query", "schema"]`
+- 查、改数据、改表：`["query", "update", "schema"]`
 
 ## 3. 用 SQLite 入门最简单
 
@@ -56,8 +51,7 @@ cat > ~/.config/dbx/local-sqlite.toml <<'EOF'
 [connection]
 engine = "sqlite"
 path = "./demo.db"
-mode = "Lantern"
-allow_actions = ["query"]
+allow_actions = ["query", "update", "schema"]
 tags = ["local"]
 EOF
 ```
@@ -72,7 +66,7 @@ EOF
 建表：
 
 ```bash
-./dbx schema local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
+./dbx schema local-sqlite 'create table users (id integer primary key, name text)'
 ```
 
 查询：
@@ -95,7 +89,7 @@ id,name
 导入：
 
 ```bash
-./dbx import file ./users.csv local-sqlite users --mode Tweezers
+./dbx import file ./users.csv local-sqlite users
 ```
 
 再查一下：
@@ -149,7 +143,6 @@ id,name
 [connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
-mode = "Lantern"
 allow_actions = ["query"]
 tags = ["dev"]
 ```
@@ -169,7 +162,6 @@ port = 3306
 user = "app"
 database = "appdb"
 password.env = "MYSQL_PASSWORD"
-mode = "Lantern"
 allow_actions = ["query"]
 ```
 
@@ -189,7 +181,7 @@ export MYSQL_PASSWORD='secret'
 
 ### 动作不允许
 
-你可能在 `Lantern` 模式下做了写操作，或者连接的 `allow_actions` 没放行当前动作。
+你可能在只读连接上做了写操作，或者连接的 `allow_actions` 没放行当前动作。
 
 ### 密码没读到
 
@@ -212,4 +204,4 @@ export MYSQL_PASSWORD='secret'
 2. 学会 `conn test`
 3. 学会 `query` / `update` / `schema` 和 `inspect`
 4. 再开始用 `import` 和 `export`
-5. 最后再碰 `tx` 和高权限 mode
+5. 最后再碰 `tx` 和更高权限的 `allow_actions`

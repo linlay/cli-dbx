@@ -1,5 +1,5 @@
 [connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
-mode = "Lantern"
+allow_actions = ["query"]
 tags = ["dev", "local"]

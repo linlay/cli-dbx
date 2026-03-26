@@ -10,31 +10,30 @@ import (
 	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
-	"github.com/linlay/cli-dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/sqlclass"
 )
 
 type Envelope struct {
-	OK             bool                `json:"ok"`
-	Kind           string              `json:"kind,omitempty"`
-	Code           string              `json:"code,omitempty"`
-	Hint           string              `json:"hint,omitempty"`
-	Next           string              `json:"next,omitempty"`
-	More           bool                `json:"more,omitempty"`
-	Mode           string              `json:"mode"`
-	Engine         string              `json:"engine"`
-	Connection     string              `json:"connection"`
-	Action         action.Action       `json:"action,omitempty"`
-	StatementClass mode.StatementClass `json:"statement_class,omitempty"`
-	RiskLevel      string              `json:"risk_level,omitempty"`
-	RowCount       int                 `json:"row_count,omitempty"`
-	Truncated      bool                `json:"truncated,omitempty"`
-	Summary        string              `json:"summary,omitempty"`
-	Data           any                 `json:"data,omitempty"`
-	Warnings       []string            `json:"warnings,omitempty"`
-	AuditID        string              `json:"audit_id"`
-	Fingerprint    string              `json:"fingerprint,omitempty"`
-	Meta           map[string]any      `json:"meta,omitempty"`
-	Verbose        bool                `json:"-"`
+	OK             bool                    `json:"ok"`
+	Kind           string                  `json:"kind,omitempty"`
+	Code           string                  `json:"code,omitempty"`
+	Hint           string                  `json:"hint,omitempty"`
+	Next           string                  `json:"next,omitempty"`
+	More           bool                    `json:"more,omitempty"`
+	Engine         string                  `json:"engine"`
+	Connection     string                  `json:"connection"`
+	Action         action.Action           `json:"action,omitempty"`
+	StatementClass sqlclass.StatementClass `json:"statement_class,omitempty"`
+	RiskLevel      string                  `json:"risk_level,omitempty"`
+	RowCount       int                     `json:"row_count,omitempty"`
+	Truncated      bool                    `json:"truncated,omitempty"`
+	Summary        string                  `json:"summary,omitempty"`
+	Data           any                     `json:"data,omitempty"`
+	Warnings       []string                `json:"warnings,omitempty"`
+	AuditID        string                  `json:"audit_id"`
+	Fingerprint    string                  `json:"fingerprint,omitempty"`
+	Meta           map[string]any          `json:"meta,omitempty"`
+	Verbose        bool                    `json:"-"`
 }
 
 func PrintEnvelope(format string, env Envelope) error {
@@ -100,9 +99,6 @@ func compactPayload(env Envelope) map[string]any {
 	if env.Verbose {
 		if env.Engine != "" {
 			payload["engine"] = env.Engine
-		}
-		if env.Mode != "" {
-			payload["mode"] = env.Mode
 		}
 		if env.RiskLevel != "" {
 			payload["risk_level"] = env.RiskLevel

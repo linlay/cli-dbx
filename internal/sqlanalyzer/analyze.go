@@ -6,28 +6,28 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/linlay/cli-dbx/internal/mode"
+	"github.com/linlay/cli-dbx/internal/sqlclass"
 )
 
 type Analysis struct {
-	Raw              string              `json:"raw"`
-	Statements       []StatementAnalysis `json:"statements"`
-	Objects          []string            `json:"objects,omitempty"`
-	StatementClass   mode.StatementClass `json:"statement_class"`
-	MultiStatement   bool                `json:"multi_statement"`
-	HasUnsafeWrite   bool                `json:"has_unsafe_write"`
-	NeedsAck         bool                `json:"needs_ack"`
-	BlockedByDefault bool                `json:"blocked_by_default"`
+	Raw              string                  `json:"raw"`
+	Statements       []StatementAnalysis     `json:"statements"`
+	Objects          []string                `json:"objects,omitempty"`
+	StatementClass   sqlclass.StatementClass `json:"statement_class"`
+	MultiStatement   bool                    `json:"multi_statement"`
+	HasUnsafeWrite   bool                    `json:"has_unsafe_write"`
+	NeedsAck         bool                    `json:"needs_ack"`
+	BlockedByDefault bool                    `json:"blocked_by_default"`
 }
 
 type StatementAnalysis struct {
-	SQL         string              `json:"sql"`
-	Class       mode.StatementClass `json:"class"`
-	Action      string              `json:"action"`
-	Object      string              `json:"object,omitempty"`
-	HasWhere    bool                `json:"has_where"`
-	HasLimit    bool                `json:"has_limit"`
-	UnsafeWrite bool                `json:"unsafe_write"`
+	SQL         string                  `json:"sql"`
+	Class       sqlclass.StatementClass `json:"class"`
+	Action      string                  `json:"action"`
+	Object      string                  `json:"object,omitempty"`
+	HasWhere    bool                    `json:"has_where"`
+	HasLimit    bool                    `json:"has_limit"`
+	UnsafeWrite bool                    `json:"unsafe_write"`
 }
 
 func Analyze(sql string) Analysis {
@@ -43,13 +43,13 @@ func Analyze(sql string) Analysis {
 		if item.Object != "" {
 			objectSet[item.Object] = struct{}{}
 		}
-		if result.StatementClass == "" || result.StatementClass == mode.ClassUnknown {
+		if result.StatementClass == "" || result.StatementClass == sqlclass.ClassUnknown {
 			result.StatementClass = item.Class
 		}
 		if item.UnsafeWrite {
 			result.HasUnsafeWrite = true
 		}
-		if item.Class == mode.ClassWriteData || item.Class == mode.ClassDDL || item.Class == mode.ClassAdmin {
+		if item.Class == sqlclass.ClassWriteData || item.Class == sqlclass.ClassDDL || item.Class == sqlclass.ClassAdmin {
 			result.NeedsAck = true
 		}
 	}
@@ -58,7 +58,7 @@ func Analyze(sql string) Analysis {
 		result.BlockedByDefault = true
 	}
 	if result.StatementClass == "" {
-		result.StatementClass = mode.ClassUnknown
+		result.StatementClass = sqlclass.ClassUnknown
 	}
 	for object := range objectSet {
 		result.Objects = append(result.Objects, object)
@@ -71,7 +71,7 @@ func analyzeStatement(sql string) StatementAnalysis {
 	stmt := strings.TrimSpace(stripComments(sql))
 	item := StatementAnalysis{
 		SQL:      stmt,
-		Class:    mode.ClassUnknown,
+		Class:    sqlclass.ClassUnknown,
 		HasWhere: containsKeyword(stmt, "where"),
 		HasLimit: containsKeyword(stmt, "limit"),
 	}
@@ -100,18 +100,18 @@ func analyzeStatement(sql string) StatementAnalysis {
 	return item
 }
 
-func classifyToken(token string) mode.StatementClass {
+func classifyToken(token string) sqlclass.StatementClass {
 	switch token {
 	case "select", "show", "describe", "desc", "pragma", "explain":
-		return mode.ClassRead
+		return sqlclass.ClassRead
 	case "insert", "update", "delete", "replace", "merge":
-		return mode.ClassWriteData
+		return sqlclass.ClassWriteData
 	case "create", "alter", "drop", "truncate", "rename":
-		return mode.ClassDDL
+		return sqlclass.ClassDDL
 	case "grant", "revoke", "analyze", "vacuum", "set", "reset":
-		return mode.ClassAdmin
+		return sqlclass.ClassAdmin
 	default:
-		return mode.ClassUnknown
+		return sqlclass.ClassUnknown
 	}
 }
 
@@ -286,7 +286,7 @@ func findCTEAction(tokens []string) int {
 		default:
 			if depth == 0 {
 				token := strings.ToLower(tokens[i])
-				if classifyToken(token) != mode.ClassUnknown || token == "with" {
+				if classifyToken(token) != sqlclass.ClassUnknown || token == "with" {
 					return i
 				}
 			}
@@ -313,7 +313,7 @@ func (a Analysis) ValidateSingleStatement() error {
 	if a.MultiStatement {
 		return fmt.Errorf("multiple statements are blocked by default")
 	}
-	if a.StatementClass == mode.ClassUnknown {
+	if a.StatementClass == sqlclass.ClassUnknown {
 		return fmt.Errorf("statement type is unknown and blocked by default")
 	}
 	return nil

@@ -45,7 +45,7 @@ PostgreSQL: inspect users
 MySQL: import customers.csv
   dbx conn test local-mysql
   dbx inspect table local-mysql customers
-  dbx import file ./customers.csv local-mysql customers --mode Tweezers
+  dbx import file ./customers.csv local-mysql customers
 
 SQLite: continue a paged read
   dbx query local-sqlite 'select * from users order by id' --page-size 100
@@ -117,22 +117,13 @@ Facts:
   Keep the same order by when you continue with --cursor.
 
 Options:
-  --mode <name>                 override the connection mode
   --page-size <n>               read page size; default 100
   --cursor <n>                  continue from data.next_cursor
   --format <json|table>         result format; default json
-  --verbose                     include engine, mode, and meta
+  --verbose                     include engine, risk, and meta
   --dry-run                     validate policy without executing
   --config <path>               read a specific config file
   --max-rows-affected <n>       write safety limit; default 1000
-
-Modes:
-  Lantern   read only; default for selects
-  Tweezers  read + row writes; use for insert/update/delete
-  Chisel    read + ddl; use for create/alter/drop
-  Forge     read + writes + ddl
-  Crown     admin access
-  Wildfire  unrestricted
 
 Examples:
   %s
@@ -163,24 +154,24 @@ func queryHelp() string {
 
 func updateHelp() string {
 	return sqlCommandHelp("update", "Run insert, update, delete, or merge SQL.", []string{
-		"dbx update local-pg 'update users set active = 1 where id = 1' --mode Tweezers",
-		"dbx update local-pg 'delete from users where archived = 1' --mode Tweezers",
+		"dbx update local-pg 'update users set active = 1 where id = 1'",
+		"dbx update local-pg 'delete from users where archived = 1'",
 		"dbx update file local-pg ./change.sql",
 	})
 }
 
 func schemaHelp() string {
 	return sqlCommandHelp("schema", "Run create, alter, drop, rename, or truncate SQL.", []string{
-		"dbx schema local-pg 'create table audit_log (id bigint primary key)' --mode Chisel",
-		"dbx schema local-pg 'alter table users add column timezone text' --mode Chisel",
+		"dbx schema local-pg 'create table audit_log (id bigint primary key)'",
+		"dbx schema local-pg 'alter table users add column timezone text'",
 		"dbx schema file local-pg ./schema.sql",
 	})
 }
 
 func adminHelp() string {
 	return sqlCommandHelp("admin", "Run supported admin SQL such as grant, revoke, set, or vacuum.", []string{
-		"dbx admin local-pg 'analyze users' --mode Crown",
-		"dbx admin local-sqlite 'vacuum' --mode Crown",
+		"dbx admin local-pg 'analyze users'",
+		"dbx admin local-sqlite 'vacuum'",
 		"dbx admin file local-pg ./admin.sql",
 	})
 }
@@ -219,7 +210,7 @@ When to use:
   Load csv or json rows into a table.
 
 Example:
-  dbx import file ./customers.csv local-mysql customers --mode Tweezers
+  dbx import file ./customers.csv local-mysql customers
 
 Next:
   Use query to verify imported rows.
@@ -236,8 +227,7 @@ Options:
   --format <csv|json>           export file format; default csv
   --limit <n>                   limit rows written to the file
   --config <path>               read a specific config file
-  --mode <name>                 override the connection mode
-  --verbose                     include engine, mode, and meta
+  --verbose                     include engine and meta
 
 Example:
   dbx export table users local-sqlite ./users.csv --format csv

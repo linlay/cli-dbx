@@ -18,9 +18,9 @@ import (
 	"github.com/linlay/cli-dbx/internal/config"
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
-	"github.com/linlay/cli-dbx/internal/mode"
 	"github.com/linlay/cli-dbx/internal/output"
 	"github.com/linlay/cli-dbx/internal/sqlanalyzer"
+	"github.com/linlay/cli-dbx/internal/sqlclass"
 )
 
 type App struct{}
@@ -73,7 +73,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 type commonFlags struct {
 	configPath string
-	mode       string
 	format     string
 	dryRun     bool
 	pageSize   int
@@ -91,7 +90,6 @@ type connFlags struct {
 func (a *App) bindCommon(fs *flag.FlagSet) *commonFlags {
 	c := &commonFlags{}
 	fs.StringVar(&c.configPath, "config", "", "config path")
-	fs.StringVar(&c.mode, "mode", "", "execution mode")
 	fs.StringVar(&c.format, "format", "json", "output format: json|table")
 	fs.BoolVar(&c.dryRun, "dry-run", false, "validate without executing")
 	fs.IntVar(&c.pageSize, "page-size", 100, "maximum rows to materialize for read results")
@@ -140,7 +138,6 @@ func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
 func commonValueFlags() map[string]bool {
 	return map[string]bool{
 		"--config":            true,
-		"--mode":              true,
 		"--format":            true,
 		"--page-size":         true,
 		"--max-rows-affected": true,
@@ -149,13 +146,13 @@ func commonValueFlags() map[string]bool {
 	}
 }
 
-func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine, selectedMode string) (conn.Spec, error) {
+func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine string, act action.Action) (conn.Spec, error) {
 	spec, err := conn.Resolve(ctx, conn.ResolveInput{
 		ConfigPath: configPath,
 		Name:       name,
 		DSN:        dsn,
 		Engine:     engine,
-		Mode:       selectedMode,
+		Action:     act,
 	})
 	if err != nil {
 		return conn.Spec{}, err
@@ -279,15 +276,10 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 	case "list":
 		names := make([]map[string]any, 0, len(profiles))
 		for _, item := range profiles {
-			allowActions := item.Connection.AllowActions
-			if len(allowActions) == 0 {
-				allowActions = action.Strings(action.DefaultsForMode(mode.MustParse(item.Connection.Mode)))
-			}
 			names = append(names, map[string]any{
 				"name":          item.Name,
 				"engine":        item.Connection.Engine,
-				"mode":          item.Connection.Mode,
-				"allow_actions": allowActions,
+				"allow_actions": item.Connection.AllowActions,
 				"tags":          item.Connection.Tags,
 			})
 		}
@@ -335,7 +327,6 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 			Summary:    "connection resolved; inspect connection or run query next",
 			Data: map[string]any{
 				"name":          spec.Name,
-				"mode":          spec.Mode,
 				"allow_actions": action.Strings(spec.AllowActions),
 				"dsn":           redactDSN(spec),
 				"meta":          output.ConnectionMeta(spec),
@@ -363,7 +354,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
 	}
-	spec, err := a.resolveSpec(ctx, common.configPath, input.name, input.dsn, input.engine, common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, input.name, input.dsn, input.engine, expectedAction)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: input.name, Engine: input.engine}, "", "", err)
 	}
@@ -389,12 +380,11 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
 			Kind:           "sql_plan",
-			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
 			Action:         actualAction,
 			StatementClass: analysis.StatementClass,
-			RiskLevel:      spec.Mode.RiskLevel(analysis.StatementClass),
+			RiskLevel:      sqlclass.RiskLevel(analysis.StatementClass),
 			Summary:        fmt.Sprintf("dry run passed policy checks; run %s without --dry-run when ready", command),
 			Data: map[string]any{
 				"objects":      analysis.Objects,
@@ -421,12 +411,11 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
 			Kind:           "query_result",
-			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
 			Action:         actualAction,
 			StatementClass: analysis.StatementClass,
-			RiskLevel:      spec.Mode.RiskLevel(analysis.StatementClass),
+			RiskLevel:      sqlclass.RiskLevel(analysis.StatementClass),
 			RowCount:       result.RowCount,
 			Truncated:      result.Truncated,
 			More:           more,
@@ -446,12 +435,11 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	return output.PrintEnvelope(common.format, output.Envelope{
 		OK:             true,
 		Kind:           "write_result",
-		Mode:           string(spec.Mode),
 		Engine:         spec.Engine,
 		Connection:     spec.Name,
 		Action:         actualAction,
 		StatementClass: analysis.StatementClass,
-		RiskLevel:      spec.Mode.RiskLevel(analysis.StatementClass),
+		RiskLevel:      sqlclass.RiskLevel(analysis.StatementClass),
 		RowCount:       int(affected),
 		Summary:        fmt.Sprintf("%d row(s) affected; inspect or run query to verify the change", affected),
 		Data:           map[string]any{"rows_affected": affected},
@@ -482,7 +470,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
 	}
-	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", action.Query)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", "", err)
 	}
@@ -503,7 +491,6 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_schema",
-			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Summary:    fmt.Sprintf("%d schema(s), %d table(s), %d relation(s) found; inspect a table before query", len(schemas), len(tables), len(relations)),
@@ -525,7 +512,6 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_table",
-			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Summary:    fmt.Sprintf("table %s.%s has %d columns; run query next if needed", info.Schema, info.Name, len(info.Columns)),
@@ -546,7 +532,6 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_connection",
-			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Summary:    "connection metadata ready; inspect tables or run query next",
@@ -567,13 +552,11 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	}
 	fs := newFlagSet("export")
 	configPath := fs.String("config", "", "config path")
-	selectedMode := fs.String("mode", "", "execution mode")
 	fileFormat := fs.String("format", "csv", "export file format: csv|json")
 	verbose := fs.Bool("verbose", false, "include extra metadata in output")
 	limit := fs.Int("limit", 0, "optional row limit for export")
 	if err := fs.Parse(normalizeFlagArgs(args, map[string]bool{
 		"--config": true,
-		"--mode":   true,
 		"--format": true,
 		"--limit":  true,
 	})); err != nil {
@@ -586,30 +569,29 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError("json", *verbose, conn.Spec{}, "", "", err)
 	}
-	spec, err := a.resolveSpec(ctx, *configPath, connName, "", "", *selectedMode)
+	spec, err := a.resolveSpec(ctx, *configPath, connName, "", "", action.Query)
 	if err != nil {
 		return a.renderError("json", *verbose, conn.Spec{Name: connName}, "", "", err)
 	}
 	if !spec.AllowsAction(action.Query) {
-		return a.renderError("json", *verbose, spec, action.Query, mode.ClassRead, fmt.Errorf("connection %s does not allow action %s", spec.Name, action.Query))
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, fmt.Errorf("connection %s does not allow action %s", spec.Name, action.Query))
 	}
 	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
 	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
-		return a.renderError("json", *verbose, spec, action.Query, mode.ClassRead, err)
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
 	file, err := os.Create(outPath)
 	if err != nil {
-		return a.renderError("json", *verbose, spec, action.Query, mode.ClassRead, err)
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
 	defer file.Close()
 	if err := db.ExportRows(result.Rows, result.Columns, *fileFormat, file); err != nil {
-		return a.renderError("json", *verbose, spec, action.Query, mode.ClassRead, err)
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
 	return output.PrintEnvelope("json", output.Envelope{
 		OK:         true,
 		Kind:       "export_result",
-		Mode:       string(spec.Mode),
 		Engine:     spec.Engine,
 		Connection: spec.Name,
 		Action:     action.Query,
@@ -642,23 +624,22 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
 	}
-	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, connName, "", "", action.Update)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: connName}, "", "", err)
 	}
 	analysis := sqlanalyzer.Analyze("insert into " + into + " values (?)")
 	if err := enforcePolicy(spec, analysis, action.Update); err != nil {
-		return a.renderError(common.format, common.verbose, spec, action.Update, mode.ClassWriteData, err)
+		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
 	columns, rows, err := readImportFile(path)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, spec, action.Update, mode.ClassWriteData, err)
+		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
 	if common.dryRun {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "import_plan",
-			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Action:     action.Update,
@@ -675,12 +656,11 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	}
 	count, err := db.ImportRows(ctx, spec, into, columns, rows)
 	if err != nil {
-		return a.renderError(common.format, common.verbose, spec, action.Update, mode.ClassWriteData, err)
+		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
 	return output.PrintEnvelope(common.format, output.Envelope{
 		OK:         true,
 		Kind:       "import_result",
-		Mode:       string(spec.Mode),
 		Engine:     spec.Engine,
 		Connection: spec.Name,
 		Action:     action.Update,
@@ -706,7 +686,6 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 	planPath := fs.String("plan", "", "transaction plan path")
 	if err := fs.Parse(normalizeFlagArgs(args, map[string]bool{
 		"--config":            true,
-		"--mode":              true,
 		"--format":            true,
 		"--page-size":         true,
 		"--max-rows-affected": true,
@@ -721,7 +700,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
 	}
-	spec, err := a.resolveSpec(ctx, common.configPath, input.name, "", "", common.mode)
+	spec, err := a.resolveSpec(ctx, common.configPath, input.name, "", "", action.Update)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{Name: input.name}, "", "", err)
 	}
@@ -742,7 +721,6 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "tx_plan",
-			Mode:       string(spec.Mode),
 			Engine:     spec.Engine,
 			Connection: spec.Name,
 			Summary:    fmt.Sprintf("validated %d transaction step(s); run tx without --dry-run when ready", len(plan.Steps)),
@@ -762,7 +740,6 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 	return output.PrintEnvelope(common.format, output.Envelope{
 		OK:         true,
 		Kind:       "tx_result",
-		Mode:       string(spec.Mode),
 		Engine:     spec.Engine,
 		Connection: spec.Name,
 		Summary:    fmt.Sprintf("transaction committed with %d step(s)", len(result.Steps)),
@@ -958,14 +935,14 @@ func nextCursor(offset, pageSize int, result db.QueryResult) string {
 	return strconv.Itoa(offset + pageSize)
 }
 
-func nextForClass(class mode.StatementClass, more bool) string {
+func nextForClass(class sqlclass.StatementClass, more bool) string {
 	if more {
 		return "fetch_more"
 	}
 	switch class {
-	case mode.ClassRead:
+	case sqlclass.ClassRead:
 		return "refine_sql"
-	case mode.ClassWriteData, mode.ClassDDL, mode.ClassAdmin:
+	case sqlclass.ClassWriteData, sqlclass.ClassDDL, sqlclass.ClassAdmin:
 		return "inspect_table"
 	default:
 		return ""
@@ -1079,7 +1056,7 @@ func summaryForError(code string) string {
 	}
 }
 
-func (a *App) renderError(format string, verbose bool, spec conn.Spec, act action.Action, class mode.StatementClass, err error) error {
+func (a *App) renderError(format string, verbose bool, spec conn.Spec, act action.Action, class sqlclass.StatementClass, err error) error {
 	code := classifyErrorCode(err)
 	env := output.Envelope{
 		OK:             false,

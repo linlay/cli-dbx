@@ -11,7 +11,6 @@ import (
 
 	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/config"
-	"github.com/linlay/cli-dbx/internal/mode"
 )
 
 type Spec struct {
@@ -26,7 +25,6 @@ type Spec struct {
 	Schema         string
 	Path           string
 	Role           string
-	Mode           mode.Mode
 	AllowActions   []action.Action
 	Tags           []string
 	ReadOnly       bool
@@ -42,7 +40,7 @@ type ResolveInput struct {
 	Name       string
 	DSN        string
 	Engine     string
-	Mode       string
+	Action     action.Action
 }
 
 func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
@@ -55,8 +53,7 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 			Name:         "adhoc",
 			Engine:       engine,
 			DSN:          in.DSN,
-			Mode:         mode.MustParse(in.Mode),
-			AllowActions: action.DefaultsForMode(mode.MustParse(in.Mode)),
+			AllowActions: []action.Action{in.Action},
 			Timeout:      15 * time.Second,
 		}
 		return finalize(spec)
@@ -87,20 +84,11 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		SecretSources: map[string]string{},
 	}
 
-	selectedMode := profile.Connection.Mode
-	if in.Mode != "" {
-		selectedMode = in.Mode
+	actions, err := action.ParseList(profile.Connection.AllowActions)
+	if err != nil {
+		return Spec{}, fmt.Errorf("connection %q allow_actions: %w", profile.Name, err)
 	}
-	spec.Mode = mode.MustParse(selectedMode)
-	if len(profile.Connection.AllowActions) > 0 {
-		actions, err := action.ParseList(profile.Connection.AllowActions)
-		if err != nil {
-			return Spec{}, fmt.Errorf("connection %q allow_actions: %w", profile.Name, err)
-		}
-		spec.AllowActions = actions
-	} else {
-		spec.AllowActions = action.DefaultsForMode(spec.Mode)
-	}
+	spec.AllowActions = actions
 
 	if profile.Connection.DSN != "" {
 		spec.DSN = profile.Connection.DSN
@@ -155,11 +143,8 @@ func finalize(spec Spec) (Spec, error) {
 	default:
 		return Spec{}, fmt.Errorf("unsupported engine %q", spec.Engine)
 	}
-	if spec.Mode == "" {
-		spec.Mode = mode.Lantern
-	}
 	if len(spec.AllowActions) == 0 {
-		spec.AllowActions = action.DefaultsForMode(spec.Mode)
+		return Spec{}, fmt.Errorf("connection %q must define allow_actions", spec.Name)
 	}
 	spec.Environment = inferEnvironment(spec.Name, spec.Tags)
 	spec.ProductionLike = spec.Environment == "prod"

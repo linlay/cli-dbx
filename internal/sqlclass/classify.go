@@ -3,14 +3,22 @@ package sqlclass
 import (
 	"strings"
 	"unicode"
-
-	"github.com/linlay/cli-dbx/internal/mode"
 )
 
-func Classify(sql string) mode.StatementClass {
+type StatementClass string
+
+const (
+	ClassRead      StatementClass = "read"
+	ClassWriteData StatementClass = "write-data"
+	ClassDDL       StatementClass = "ddl"
+	ClassAdmin     StatementClass = "admin"
+	ClassUnknown   StatementClass = "unknown"
+)
+
+func Classify(sql string) StatementClass {
 	s := firstStatement(stripComments(sql))
 	if s == "" {
-		return mode.ClassUnknown
+		return ClassUnknown
 	}
 	token := leadingToken(s)
 	if token == "with" {
@@ -31,18 +39,29 @@ func HasUnsafeWrite(sql string) bool {
 	return !strings.Contains(" "+strings.ToLower(s)+" ", " where ")
 }
 
-func classifyToken(token string) mode.StatementClass {
+func classifyToken(token string) StatementClass {
 	switch token {
 	case "select", "show", "describe", "desc", "pragma", "explain":
-		return mode.ClassRead
+		return ClassRead
 	case "insert", "update", "delete", "replace", "merge":
-		return mode.ClassWriteData
+		return ClassWriteData
 	case "create", "alter", "drop", "truncate", "rename":
-		return mode.ClassDDL
+		return ClassDDL
 	case "grant", "revoke", "analyze", "vacuum", "set", "reset":
-		return mode.ClassAdmin
+		return ClassAdmin
 	default:
-		return mode.ClassUnknown
+		return ClassUnknown
+	}
+}
+
+func RiskLevel(class StatementClass) string {
+	switch class {
+	case ClassAdmin, ClassDDL:
+		return "high"
+	case ClassWriteData:
+		return "medium"
+	default:
+		return "low"
 	}
 }
 
