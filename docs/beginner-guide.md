@@ -6,6 +6,8 @@
 
 `dbx` 不是传统数据库 GUI，它更像是一个“有安全边界的数据库执行器”。
 
+如果你想看这套边界为什么这样设计、`allow_actions` 和 `tx run` 的约束是什么，可以继续看仓库根目录的 [CLAUDE.md](../CLAUDE.md)。
+
 你可以把它想象成：
 
 - 会连数据库
@@ -27,7 +29,7 @@
 这样你以后执行命令只要写：
 
 ```bash
-./dbx exec local-sqlite 'select 1'
+./dbx query local-sqlite 'select 1'
 ```
 
 ### mode
@@ -55,6 +57,7 @@ cat > ~/.config/dbx/local-sqlite.toml <<'EOF'
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
+allow_actions = ["query"]
 tags = ["local"]
 EOF
 ```
@@ -69,14 +72,14 @@ EOF
 建表：
 
 ```bash
-./dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
+./dbx schema local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
 ```
 
 查询：
 
 ```bash
-./dbx exec local-sqlite 'select * from users'
-./dbx exec local-sqlite 'select * from users order by id' --page-size 100
+./dbx query local-sqlite 'select * from users'
+./dbx query local-sqlite 'select * from users order by id' --page-size 100
 ```
 
 ## 4. 导入一个 CSV
@@ -98,14 +101,14 @@ id,name
 再查一下：
 
 ```bash
-./dbx exec local-sqlite 'select * from users order by id'
+./dbx query local-sqlite 'select * from users order by id'
 ```
 
 如果结果超过默认 `100` 行，输出里会给 `data.next_cursor`。继续读下一页时，保持同一条 SQL：
 
 ```bash
-./dbx exec local-sqlite 'select * from users order by id'
-./dbx exec local-sqlite 'select * from users order by id' --cursor 100
+./dbx query local-sqlite 'select * from users order by id'
+./dbx query local-sqlite 'select * from users order by id' --cursor 100
 ```
 
 ## 5. 如果你用 PostgreSQL 或 MySQL
@@ -117,6 +120,7 @@ id,name
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
 mode = "Lantern"
+allow_actions = ["query"]
 tags = ["dev"]
 ```
 
@@ -136,6 +140,7 @@ user = "app"
 database = "appdb"
 password.env = "MYSQL_PASSWORD"
 mode = "Lantern"
+allow_actions = ["query"]
 ```
 
 ```bash
@@ -152,9 +157,9 @@ export MYSQL_PASSWORD='secret'
 - 配置文件是不是 `~/.config/dbx/<name>.toml`
 - 你传入的连接名是不是和文件名一致
 
-### 模式不允许
+### 动作不允许
 
-你可能在 `Lantern` 模式下做了写操作。
+你可能在 `Lantern` 模式下做了写操作，或者连接的 `allow_actions` 没放行当前动作。
 
 ### 密码没读到
 
@@ -175,6 +180,6 @@ export MYSQL_PASSWORD='secret'
 
 1. 先用 SQLite 跑通
 2. 学会 `conn test`
-3. 学会 `exec` 和 `inspect`
+3. 学会 `query` / `update` / `schema` 和 `inspect`
 4. 再开始用 `import` 和 `export`
-5. 最后再碰高权限 mode
+5. 最后再碰 `tx run` 和高权限 mode

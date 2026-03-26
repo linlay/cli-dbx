@@ -28,22 +28,23 @@ type fileConfig struct {
 }
 
 type ConnectionConfig struct {
-	Engine   string      `toml:"engine"`
-	DSN      string      `toml:"dsn"`
-	DSNEnv   string      `toml:"dsn_env"`
-	Host     string      `toml:"host"`
-	Port     int         `toml:"port"`
-	User     string      `toml:"user"`
-	Password ValueSource `toml:"password"`
-	Database string      `toml:"database"`
-	Schema   string      `toml:"schema"`
-	Path     string      `toml:"path"`
-	SSLMode  string      `toml:"sslmode"`
-	ReadOnly bool        `toml:"readonly"`
-	Timeout  string      `toml:"timeout"`
-	Role     string      `toml:"role"`
-	Mode     string      `toml:"mode"`
-	Tags     []string    `toml:"tags"`
+	Engine       string      `toml:"engine"`
+	DSN          string      `toml:"dsn"`
+	DSNEnv       string      `toml:"dsn_env"`
+	Host         string      `toml:"host"`
+	Port         int         `toml:"port"`
+	User         string      `toml:"user"`
+	Password     ValueSource `toml:"password"`
+	Database     string      `toml:"database"`
+	Schema       string      `toml:"schema"`
+	Path         string      `toml:"path"`
+	SSLMode      string      `toml:"sslmode"`
+	ReadOnly     bool        `toml:"readonly"`
+	Timeout      string      `toml:"timeout"`
+	Role         string      `toml:"role"`
+	Mode         string      `toml:"mode"`
+	Tags         []string    `toml:"tags"`
+	AllowActions []string    `toml:"allow_actions"`
 }
 
 type ValueSource struct {

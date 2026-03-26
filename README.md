@@ -1,149 +1,77 @@
 # dbx
 
-`dbx` 是一个给智能体和人类都能用的 database CLI。  
-第一版重点支持 MySQL、PostgreSQL、SQLite，强调 4 件事：
+## 1. 项目简介
 
-- 连接配置清晰
-- 执行边界明确
-- 输出对大模型友好
-- 新手也能快速跑起来
+`dbx` 是一个给人类和智能体都能用的 database CLI。它面向 MySQL、PostgreSQL、SQLite，重点解决三件事：
 
-## 1. 它能做什么
+- 用统一方式管理数据库连接
+- 用显式命令执行查询、更新、DDL 和导入导出
+- 用适合脚本和终端的格式返回结果
 
-当前已经支持：
+如果你要看设计目标、动作边界、事务模型和开发约定，请看 [CLAUDE.md](./CLAUDE.md)。
 
-- `conn`：查看、解析、测试连接
-- `inspect`：查看 schema、表结构、连接信息
-- `exec`：执行 SQL
-- `export`：导出表数据
-- `import`：导入 CSV / JSON
-- 模式系统：`Lantern`、`Tweezers`、`Chisel`、`Forge`、`Crown`、`Wildfire`
-- CLI 输出格式：`json`、`table`
-- 导出文件格式：`csv`、`json`
+## 2. 快速开始
 
-## 2. 安装 / 下载
+### 前置要求
 
-如果你是普通使用者，优先从 GitHub Releases 下载对应平台压缩包：
+- Go 1.22+，或直接下载 Release 二进制
+- 本地可访问的 PostgreSQL / MySQL / SQLite
 
-- macOS Apple Silicon：`dbx_vX.Y.Z_darwin_arm64.tar.gz`
-- macOS Intel：`dbx_vX.Y.Z_darwin_amd64.tar.gz`
-- Linux ARM64：`dbx_vX.Y.Z_linux_arm64.tar.gz`
-- Linux AMD64：`dbx_vX.Y.Z_linux_amd64.tar.gz`
-
-解压后可以先确认版本信息：
-
-```bash
-tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
-./dbx version
-./dbx --version
-```
-
-如果你想从源码自行编译，再看下面这节。
-
-## 3. 先编译
-
-如果你已经装好了 Go，可以直接在仓库根目录运行：
+### 本地编译
 
 ```bash
 go build -o ./dbx ./cmd/dbx
-```
-
-运行测试：
-
-```bash
-go test ./...
-```
-
-如果你当前网络连不上 `proxy.golang.org`，可以临时这样跑：
-
-```bash
-GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go test ./...
-GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go build -o ./dbx ./cmd/dbx
-```
-
-如果你只想查看当前构建嵌入的版本信息：
-
-```bash
 ./dbx version
-./dbx --version
 ```
 
-## 4. 5 分钟跑起来
+### 5 分钟跑起来
 
-最简单的体验方式是先用 SQLite。
-
-### 第一步：创建配置目录
+先创建默认配置目录：
 
 ```bash
 mkdir -p ~/.config/dbx
 ```
 
-### 第二步：写一个最小配置
-
-把下面内容写到 `~/.config/dbx/local-sqlite.toml`：
+创建一个最小 SQLite 连接 `~/.config/dbx/local-sqlite.toml`：
 
 ```toml
 [connection]
 engine = "sqlite"
 path = "./demo.db"
 mode = "Lantern"
+allow_actions = ["query"]
 tags = ["local"]
 ```
 
-也可以直接参考现成示例：
-
-- [config.example.toml](./testdata/config.example.toml)
-- [config.sqlite.toml](./testdata/config.sqlite.toml)
-
-### 第三步：测试连接
+准备环境并执行最小流程：
 
 ```bash
 ./dbx conn list
 ./dbx conn test local-sqlite
-```
-
-### 第四步：建表
-
-`Lantern` 是只读模式，不能改表，所以这里要切到 `Chisel`：
-
-```bash
-./dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
-```
-
-### 第五步：导入 CSV
-
-先准备一个文件 `users.csv`：
-
-```csv
-id,name
-1,Ada
-2,Linus
-```
-
-再导入：
-
-```bash
-./dbx import file users.csv local-sqlite users --mode Tweezers
-```
-
-### 第六步：执行 SQL
-
-```bash
-./dbx exec local-sqlite 'select * from users order by id'
-./dbx exec local-sqlite 'select * from users order by id' --format table
-./dbx exec local-sqlite 'select * from users order by id' --page-size 100
+./dbx schema local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
+./dbx import file ./users.csv local-sqlite users --mode Tweezers
+./dbx query local-sqlite 'select * from users order by id'
 ./dbx inspect table local-sqlite users
+./dbx export table users local-sqlite ./users-export.csv --format csv
 ```
 
-### 第七步：导出
-
-`export` 会把真正的数据写到文件里，所以必须显式提供输出文件路径：
+常用命令：
 
 ```bash
-./dbx export table users local-sqlite users-export.csv --format csv
+./dbx query local-sqlite 'select * from users'
+./dbx update local-sqlite 'update users set name = "Ada" where id = 1' --mode Tweezers
+./dbx schema local-sqlite 'alter table users add column email text' --mode Chisel
+./dbx query file local-sqlite ./query.sql
+./dbx query dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select 1'
 ```
 
-## 5. 配置文件怎么写
+说明：
+
+- 优先使用 `query` / `update` / `schema` / `admin`
+- `exec` 仍然保留给旧脚本兼容
+- 分页读取时继续传回同一条 SQL 和 `--cursor`
+
+## 3. 配置说明
 
 默认配置目录：
 
@@ -151,34 +79,20 @@ id,name
 ~/.config/dbx
 ```
 
-每个连接一个文件。最常见的结构是：
+每个连接一个文件，例如 `~/.config/dbx/local-pg.toml`。
+
+最小 PostgreSQL 例子：
 
 ```toml
 [connection]
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
 mode = "Lantern"
+allow_actions = ["query"]
 tags = ["dev", "local"]
 ```
 
-一个连接 profile 至少需要这些字段：
-
-- `engine`
-- `mode`
-- 一组可用的连接信息
-
-连接信息有两种写法。
-
-### 写法 1：直接给 DSN
-
-```toml
-[connection]
-engine = "postgres"
-dsn = "postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable"
-mode = "Lantern"
-```
-
-### 写法 2：结构化字段
+最小 MySQL 例子：
 
 ```toml
 [connection]
@@ -189,262 +103,93 @@ user = "app"
 database = "appdb"
 password.env = "MYSQL_PASSWORD"
 mode = "Lantern"
+allow_actions = ["query"]
 ```
 
-SQLite 也用同一套 profile：
+密码来源支持：
 
-```toml
-[connection]
-engine = "sqlite"
-path = "./demo.db"
-mode = "Lantern"
-```
+- `password.env`
+- `password.file`
+- `password.cmd`
+- 明文值
 
-## 6. 密码怎么放
+操作层面可以先这样理解：
 
-推荐顺序：
+- `mode` 控制默认风险等级
+- `allow_actions` 控制这个连接允许哪些命令动作
 
-1. `env`
-2. `file`
-3. `cmd`
-4. 明文值
+如果你要理解 `mode` 和 `allow_actions` 的关系、为什么 `tx run` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
 
-### 环境变量
+也可以直接参考：
 
-```toml
-password.env = "MYSQL_PASSWORD"
-```
+- [config.example.toml](./testdata/config.example.toml)
+- [config.sqlite.toml](./testdata/config.sqlite.toml)
 
-### 文件
+## 4. 发布与分发
 
-```toml
-password.file = "~/.secrets/mysql_password"
-```
+如果你是普通使用者，优先从 GitHub Releases 下载对应平台压缩包：
 
-### 命令输出
+- macOS Apple Silicon：`dbx_vX.Y.Z_darwin_arm64.tar.gz`
+- macOS Intel：`dbx_vX.Y.Z_darwin_amd64.tar.gz`
+- Linux ARM64：`dbx_vX.Y.Z_linux_arm64.tar.gz`
+- Linux AMD64：`dbx_vX.Y.Z_linux_amd64.tar.gz`
 
-```toml
-password.cmd = ["printenv", "MYSQL_PASSWORD"]
-```
-
-注意：
-
-- `cmd` 必须是数组形式，不能写成一整段 shell
-- `dbx` 只会读取标准输出
-- 命令失败会直接报错
-
-## 7. 模式怎么选
-
-如果你把模式理解成“安全开关”，就很容易上手。
-
-| 模式 | 适合做什么 | 是否可写 |
-| --- | --- | --- |
-| `Lantern` | 查结构、查数据、做分析 | 否 |
-| `Tweezers` | 精细改数据 | 是，不能改表 |
-| `Chisel` | 改表结构 | 是，主要是 DDL |
-| `Forge` | 迁移、批量施工 | 是 |
-| `Crown` | 库级治理、角色、配置 | 是，高风险 |
-| `Wildfire` | 不受限 | 是，最高风险 |
-
-最常见用法：
-
-- 日常查询：`Lantern`
-- 导入数据：`Tweezers`
-- 建表改字段：`Chisel`
-
-高风险动作要通过更高的 `mode` 来表达意图，比如建表用 `Chisel`。
-
-## 8. 最常用命令
-
-### 看有哪些连接
+解压后可直接验证：
 
 ```bash
-./dbx conn list
+tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
+./dbx version
+./dbx conn --help
 ```
 
-### 看某个连接解析后的结果
+维护者的构建、打包、发布流程见 [CLAUDE.md](./CLAUDE.md)。
 
-```bash
-./dbx conn show local-sqlite
-./dbx conn resolve local-sqlite
-```
+## 5. 简单验证与排查
 
-### 测试连接是否可用
+### 简单测试
 
-```bash
-./dbx conn test local-sqlite
-```
-
-### 执行 SQL（exec）
-
-```bash
-./dbx exec local-sqlite 'select * from users'
-```
-
-也可以从文件读 SQL：
-
-```bash
-./dbx exec file local-sqlite ./query.sql
-```
-
-### 查看表结构
-
-```bash
-./dbx inspect table local-sqlite users
-```
-
-### 查看 schema 和表列表
-
-```bash
-./dbx inspect schema local-sqlite
-```
-
-### 导入 CSV
-
-```bash
-./dbx import file ./users.csv local-sqlite users --mode Tweezers
-```
-
-### 导出 CSV
-
-```bash
-./dbx export table users local-sqlite ./users.csv --format csv
-```
-
-## 9. 结果格式和分页
-
-CLI 结果只保留两种格式：
-
-- `json`：默认格式，给脚本和智能体消费
-- `table`：给人快速看
-
-例如：
-
-```bash
-./dbx exec local-sqlite 'select * from users' --format json
-./dbx exec local-sqlite 'select * from users' --format table
-```
-
-读查询默认最多返回 `100` 行。
-
-如果结果还有更多，输出里会带：
-
-- `more: true`
-- `data.next_cursor`
-
-继续读取下一页时，把同一条 SQL 和返回的 `next_cursor` 一起传回去：
-
-```bash
-./dbx exec local-sqlite 'select * from users order by id'
-./dbx exec local-sqlite 'select * from users order by id' --cursor 100
-./dbx exec local-sqlite 'select * from users order by id' --cursor 100 --page-size 200
-```
-
-分页时要保持相同的 `order by`，这样每一页的顺序才稳定。
-
-## 10. 导出文件格式
-
-- `csv`：默认导出格式
-- `json`：结构化导出格式
-
-例如：
-
-```bash
-./dbx export table users local-sqlite ./users.csv --format csv
-./dbx export table users local-sqlite ./users.json --format json
-```
-
-## 11. 环境变量支持
-
-除了配置文件，也支持 `exec dsn` 直接传 DSN：
-
-例如：
-
-```bash
-./dbx exec dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select 1'
-```
-
-## 12. 新手常见问题
-
-### 为什么提示 mode 不允许？
-
-因为默认模式通常是 `Lantern`，它只能读，不能写。  
-如果你在建表、导入、更新数据，需要显式切到更高模式。
-
-### 为什么导出一定要提供输出文件路径？
-
-因为 `dbx` 会同时输出审计 envelope。  
-如果导出内容也直接打到标准输出，二者会混在一起，不方便后续处理。
-
-### 为什么生产连接更严格？
-
-连接名或标签里带 `prod` 时，`dbx` 会默认启用更保守的行为，避免误操作。
-
-### 为什么我的密码配置不生效？
-
-先优先检查：
-
-- 环境变量名是否真的存在
-- `password.cmd` 是否写成了数组
-- 文件路径是否正确
-
-## 13. 手工发布 v0.1.0
-
-首个版本建议按 Git tag 作为正式版本号来源，例如 `v0.1.0`。
-
-1. 确认代码和文档已经提交完成。
-2. 运行测试：
+仓库级测试：
 
 ```bash
 go test ./...
 ```
 
-3. 创建并推送 tag：
+简单冒烟验证：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./dbx version
+./dbx conn list
+./dbx conn test local-sqlite
+./dbx query local-sqlite 'select * from users' --format table
 ```
 
-4. 在 tag 对应提交上本地打包：
+### 结果格式与分页
+
+- `json`：默认格式，适合脚本和智能体
+- `table`：适合人直接查看
+
+例如：
 
 ```bash
-scripts/release/build.sh v0.1.0
+./dbx query local-sqlite 'select * from users' --format json
+./dbx query local-sqlite 'select * from users' --format table
+./dbx query local-sqlite 'select * from users order by id' --cursor 100 --page-size 200
 ```
 
-如果网络不稳定，可以像编译时一样显式带上代理环境变量：
+### 常见排查
 
-```bash
-GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn scripts/release/build.sh v0.1.0
-```
+- 连接不存在：确认配置文件名和连接名一致
+- 动作不允许：检查 `mode` 和 `allow_actions`
+- 密码没读到：检查 `password.env`、`password.file`、`password.cmd`
+- SQLite 路径不对：相对路径是相对于配置文件目录，不是当前工作目录
 
-打包完成后会生成：
+## 6. 进一步阅读
 
-- `dist/v0.1.0/dbx_v0.1.0_darwin_amd64.tar.gz`
-- `dist/v0.1.0/dbx_v0.1.0_darwin_arm64.tar.gz`
-- `dist/v0.1.0/dbx_v0.1.0_linux_amd64.tar.gz`
-- `dist/v0.1.0/dbx_v0.1.0_linux_arm64.tar.gz`
-- `dist/v0.1.0/dbx_v0.1.0_checksums.txt`
-
-5. 校验压缩包摘要：
-
-```bash
-cd dist/v0.1.0
-shasum -a 256 -c dbx_v0.1.0_checksums.txt
-```
-
-6. 在 GitHub 创建 `v0.1.0` Release，并手动上传这 5 个文件。
-
-建议 Release 正文至少包含：
-
-- 版本亮点摘要
-- 支持的平台：macOS/Linux, amd64/arm64
-- `checksums` 文件可用于下载后校验
-
-如果准备公开发布，建议在首发前补上 `LICENSE` 文件，打包脚本会在存在时自动把它放进压缩包。
-
-## 14. 进一步阅读
-
+- [CLAUDE.md](./CLAUDE.md)
+  设计与开发约定
 - [Beginner Guide](./docs/beginner-guide.md)
+  第一次上手
 - [config.example.toml](./testdata/config.example.toml)
+  配置示例
 - [config.sqlite.toml](./testdata/config.sqlite.toml)
+  SQLite 示例

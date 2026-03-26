@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/config"
 	"github.com/linlay/cli-dbx/internal/mode"
 )
@@ -26,6 +27,7 @@ type Spec struct {
 	Path           string
 	Role           string
 	Mode           mode.Mode
+	AllowActions   []action.Action
 	Tags           []string
 	ReadOnly       bool
 	Timeout        time.Duration
@@ -50,11 +52,12 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 			engine = inferEngine(in.DSN)
 		}
 		spec := Spec{
-			Name:    "adhoc",
-			Engine:  engine,
-			DSN:     in.DSN,
-			Mode:    mode.MustParse(in.Mode),
-			Timeout: 15 * time.Second,
+			Name:         "adhoc",
+			Engine:       engine,
+			DSN:          in.DSN,
+			Mode:         mode.MustParse(in.Mode),
+			AllowActions: action.DefaultsForMode(mode.MustParse(in.Mode)),
+			Timeout:      15 * time.Second,
 		}
 		return finalize(spec)
 	}
@@ -89,6 +92,15 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		selectedMode = in.Mode
 	}
 	spec.Mode = mode.MustParse(selectedMode)
+	if len(profile.Connection.AllowActions) > 0 {
+		actions, err := action.ParseList(profile.Connection.AllowActions)
+		if err != nil {
+			return Spec{}, fmt.Errorf("connection %q allow_actions: %w", profile.Name, err)
+		}
+		spec.AllowActions = actions
+	} else {
+		spec.AllowActions = action.DefaultsForMode(spec.Mode)
+	}
 
 	if profile.Connection.DSN != "" {
 		spec.DSN = profile.Connection.DSN
@@ -146,13 +158,20 @@ func finalize(spec Spec) (Spec, error) {
 	if spec.Mode == "" {
 		spec.Mode = mode.Lantern
 	}
+	if len(spec.AllowActions) == 0 {
+		spec.AllowActions = action.DefaultsForMode(spec.Mode)
+	}
 	spec.Environment = inferEnvironment(spec.Name, spec.Tags)
 	spec.ProductionLike = spec.Environment == "prod"
-	if spec.ProductionLike && spec.Mode != mode.Lantern && spec.Mode != mode.Tweezers {
-		return Spec{}, fmt.Errorf("connection %q is tagged as prod-like and blocks mode %s by default", spec.Name, spec.Mode)
+	if spec.ProductionLike && (action.Contains(spec.AllowActions, action.Schema) || action.Contains(spec.AllowActions, action.Admin)) {
+		return Spec{}, fmt.Errorf("connection %q is tagged as prod-like and blocks actions %v by default", spec.Name, action.Strings(spec.AllowActions))
 	}
 	spec.DisplayTarget = displayTarget(spec)
 	return spec, nil
+}
+
+func (s Spec) AllowsAction(target action.Action) bool {
+	return action.Contains(s.AllowActions, target)
 }
 
 func inferEnvironment(name string, tags []string) string {

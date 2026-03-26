@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,8 +20,11 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	root := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help"})
 	})
-	if !strings.Contains(root, "dbx exec local-pg 'select * from users order by id' --page-size 100") {
-		t.Fatalf("root help should point to exec usage, got:\n%s", root)
+	if !strings.Contains(root, "dbx query local-pg 'select * from users order by id' --page-size 100") {
+		t.Fatalf("root help should point to query usage, got:\n%s", root)
+	}
+	if !strings.Contains(root, "query     run read-only SQL") || !strings.Contains(root, "tx        run a structured transaction plan") {
+		t.Fatalf("root help should include action and tx commands, got:\n%s", root)
 	}
 	if !strings.Contains(root, "version   show build version") || !strings.Contains(root, "dbx version") {
 		t.Fatalf("root help should include version command, got:\n%s", root)
@@ -32,27 +36,41 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	examples := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help", "examples"})
 	})
-	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") || !strings.Contains(examples, "--cursor 100") {
+	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") || !strings.Contains(examples, "--cursor 100") || !strings.Contains(examples, "dbx tx run local-pg --plan ./plan.json") {
 		t.Fatalf("help examples should include postgres and mysql examples, got:\n%s", examples)
+	}
+
+	queryHelp := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"query", "--help"})
+	})
+	if !strings.Contains(queryHelp, "Run read-only SQL.") || !strings.Contains(queryHelp, "allow_actions") {
+		t.Fatalf("query help should include action guidance, got:\n%s", queryHelp)
+	}
+	if !strings.Contains(queryHelp, "--page-size <n>               read page size; default 100") || !strings.Contains(queryHelp, "--format <json|table>         result format; default json") {
+		t.Fatalf("query help should list retained params and defaults, got:\n%s", queryHelp)
+	}
+	if !strings.Contains(queryHelp, "Keep the same order by when you continue with --cursor.") || !strings.Contains(queryHelp, "dbx query local-pg 'select * from users order by id' --cursor 100") {
+		t.Fatalf("query help should include pagination guidance, got:\n%s", queryHelp)
+	}
+	if strings.Contains(queryHelp, "--require-ack") || strings.Contains(queryHelp, "--verbose-errors") || strings.Contains(queryHelp, "sampled by default") {
+		t.Fatalf("query help should not mention removed flags or sampling, got:\n%s", queryHelp)
+	}
+	if strings.Contains(queryHelp, "Common next actions") || strings.Contains(queryHelp, "agent-first") {
+		t.Fatalf("query help should omit design sections, got:\n%s", queryHelp)
 	}
 
 	execHelp := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"exec", "--help"})
 	})
-	if !strings.Contains(execHelp, "Run any SQL") || !strings.Contains(execHelp, "Lantern   read only; default for selects") {
-		t.Fatalf("exec help should include compact mode guidance, got:\n%s", execHelp)
+	if !strings.Contains(execHelp, "Compatibility command") {
+		t.Fatalf("exec help should explain compatibility mode, got:\n%s", execHelp)
 	}
-	if !strings.Contains(execHelp, "--page-size <n>               read page size; default 100") || !strings.Contains(execHelp, "--format <json|table>         result format; default json") {
-		t.Fatalf("exec help should list retained params and defaults, got:\n%s", execHelp)
-	}
-	if !strings.Contains(execHelp, "Keep the same order by when you continue with --cursor.") || !strings.Contains(execHelp, "dbx exec local-pg 'select * from users order by id' --cursor 100") {
-		t.Fatalf("exec help should include pagination guidance, got:\n%s", execHelp)
-	}
-	if strings.Contains(execHelp, "--require-ack") || strings.Contains(execHelp, "--verbose-errors") || strings.Contains(execHelp, "sampled by default") {
-		t.Fatalf("exec help should not mention removed flags or sampling, got:\n%s", execHelp)
-	}
-	if strings.Contains(execHelp, "Common next actions") || strings.Contains(execHelp, "agent-first") {
-		t.Fatalf("exec help should omit design sections, got:\n%s", execHelp)
+
+	txHelp := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"tx", "--help"})
+	})
+	if !strings.Contains(txHelp, "run <conn> --plan <path.json>") || !strings.Contains(txHelp, "Any failure rolls the whole transaction back.") {
+		t.Fatalf("tx help should describe transaction plans, got:\n%s", txHelp)
 	}
 
 	connHelp := captureStdout(t, func() error {
@@ -108,7 +126,7 @@ func TestVersionOutputsEmbeddedBuildInfo(t *testing.T) {
 func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 125)
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "select id, name from users order by id"})
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id, name from users order by id"})
 	})
 
 	var payload map[string]any
@@ -117,6 +135,9 @@ func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	}
 	if got := payload["kind"]; got != "exec_result" {
 		t.Fatalf("kind = %v, want exec_result", got)
+	}
+	if got := payload["action"]; got != "query" {
+		t.Fatalf("action = %v, want query", got)
 	}
 	if got := payload["more"]; got != true {
 		t.Fatalf("more = %v, want true", got)
@@ -144,7 +165,7 @@ func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 func TestExecRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 	out := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "select id from users order by id"})
+		err := New().Run(context.Background(), []string{"query", "--config", configPath, "select id from users order by id"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -183,7 +204,7 @@ func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 
 	verbose := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--verbose", "local-sqlite", "select id from users order by id"})
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "--verbose", "local-sqlite", "select id from users order by id"})
 	})
 	var verbosePayload map[string]any
 	if err := json.Unmarshal([]byte(verbose), &verbosePayload); err != nil {
@@ -195,9 +216,13 @@ func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	if _, ok := verbosePayload["meta"]; !ok {
 		t.Fatalf("verbose output should include meta: %#v", verbosePayload)
 	}
+	meta := verbosePayload["meta"].(map[string]any)
+	if _, ok := meta["allow_actions"]; !ok {
+		t.Fatalf("verbose meta should include allow_actions: %#v", verbosePayload)
+	}
 
 	errOut := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "delete from users"})
+		err := New().Run(context.Background(), []string{"update", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "delete from users"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -219,7 +244,7 @@ func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 func TestExecParsesFlagsAfterPositionals(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "update users set name = 'aaa' where id = 1", "--mode", "Tweezers"})
+		return New().Run(context.Background(), []string{"update", "--config", configPath, "local-sqlite", "update users set name = 'aaa' where id = 1", "--mode", "Tweezers"})
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
@@ -250,7 +275,7 @@ func TestExecBlocksMultiStatementButAllowsScopedWriteWithoutAck(t *testing.T) {
 	}
 
 	writeOut := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "update users set name = 'x' where id = 1"})
+		return New().Run(context.Background(), []string{"update", "--config", configPath, "--mode", "Tweezers", "local-sqlite", "update users set name = 'x' where id = 1"})
 	})
 	var writePayload map[string]any
 	if err := json.Unmarshal([]byte(writeOut), &writePayload); err != nil {
@@ -315,7 +340,7 @@ func TestExecCursorAndInspectRelations(t *testing.T) {
 	configPath := makeSQLiteRelationFixture(t)
 
 	pageOut := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "--cursor", "20", "--page-size", "5", "local-sqlite", "select id, name from users order by id"})
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "--cursor", "20", "--page-size", "5", "local-sqlite", "select id, name from users order by id"})
 	})
 	var pagePayload map[string]any
 	if err := json.Unmarshal([]byte(pageOut), &pagePayload); err != nil {
@@ -383,7 +408,7 @@ func TestExportRequiresExplicitConnectionName(t *testing.T) {
 func TestExecSupportsConfigFilePath(t *testing.T) {
 	configPath := makeSQLiteConfigFileFixture(t, 3)
 	out := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "select id from users order by id"})
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id from users order by id"})
 	})
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
@@ -391,6 +416,9 @@ func TestExecSupportsConfigFilePath(t *testing.T) {
 	}
 	if payload["kind"] != "exec_result" || payload["conn"] != "local-sqlite" {
 		t.Fatalf("expected exec_result via config file, got %#v", payload)
+	}
+	if payload["action"] != "query" {
+		t.Fatalf("expected action=query via config file, got %#v", payload)
 	}
 }
 
@@ -435,17 +463,17 @@ mode = "Lantern"
 
 func TestRemovedFormatsAreRejected(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 2)
-	err := New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "agent", "local-sqlite", "select id from users order by id"})
+	err := New().Run(context.Background(), []string{"query", "--config", configPath, "--format", "agent", "local-sqlite", "select id from users order by id"})
 	if err == nil || !strings.Contains(err.Error(), `unsupported output format "agent"`) {
 		t.Fatalf("agent format should be removed, got: %v", err)
 	}
 
-	err = New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "llm", "local-sqlite", "select id from users order by id"})
+	err = New().Run(context.Background(), []string{"query", "--config", configPath, "--format", "llm", "local-sqlite", "select id from users order by id"})
 	if err == nil || !strings.Contains(err.Error(), `unsupported output format "llm"`) {
 		t.Fatalf("llm format should be removed, got: %v", err)
 	}
 
-	err = New().Run(context.Background(), []string{"exec", "--config", configPath, "--format", "jsonl", "local-sqlite", "select id from users order by id"})
+	err = New().Run(context.Background(), []string{"query", "--config", configPath, "--format", "jsonl", "local-sqlite", "select id from users order by id"})
 	if err == nil || !strings.Contains(err.Error(), `unsupported output format "jsonl"`) {
 		t.Fatalf("jsonl format should be removed, got: %v", err)
 	}
@@ -456,6 +484,150 @@ func TestSQLCommandIsUnknown(t *testing.T) {
 	err := New().Run(context.Background(), []string{"sql", "--config", configPath, "local-sqlite", "select id from users order by id"})
 	if err == nil || !strings.Contains(err.Error(), `unknown command "sql"`) {
 		t.Fatalf("sql should be removed, got: %v", err)
+	}
+}
+
+func TestAllowActionsBlocksWriteCommandsButKeepsQuery(t *testing.T) {
+	configPath := makeSQLiteFixtureWithExtras(t, 3, "mode = \"Forge\"\nallow_actions = [\"query\"]\n")
+
+	queryOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id from users order by id"})
+	})
+	var queryPayload map[string]any
+	if err := json.Unmarshal([]byte(queryOut), &queryPayload); err != nil {
+		t.Fatalf("unmarshal query output: %v", err)
+	}
+	if queryPayload["action"] != "query" {
+		t.Fatalf("expected query action, got %#v", queryPayload)
+	}
+
+	for _, args := range [][]string{
+		{"update", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"},
+		{"schema", "--config", configPath, "local-sqlite", "alter table users add column email text"},
+		{"exec", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"},
+	} {
+		out := captureStdout(t, func() error {
+			err := New().Run(context.Background(), args)
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return nil
+			}
+			return err
+		})
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatalf("unmarshal blocked output: %v", err)
+		}
+		if payload["code"] != "action_blocked" {
+			t.Fatalf("expected action_blocked, got %#v", payload)
+		}
+	}
+}
+
+func TestActionCommandsRejectMismatchedSQL(t *testing.T) {
+	configPath := makeSQLiteFixtureWithExtras(t, 3, "mode = \"Forge\"\nallow_actions = [\"query\", \"update\", \"schema\"]\n")
+
+	for _, tc := range []struct {
+		args   []string
+		action string
+	}{
+		{args: []string{"update", "--config", configPath, "local-sqlite", "select id from users"}, action: "update"},
+		{args: []string{"schema", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"}, action: "schema"},
+	} {
+		out := captureStdout(t, func() error {
+			err := New().Run(context.Background(), tc.args)
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return nil
+			}
+			return err
+		})
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatalf("unmarshal mismatch output: %v", err)
+		}
+		if payload["code"] != "action_mismatch" || payload["action"] != tc.action {
+			t.Fatalf("expected action_mismatch for %s, got %#v", tc.action, payload)
+		}
+	}
+}
+
+func TestTxRunRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
+	configPath := makeSQLiteFixtureWithExtras(t, 2, "mode = \"Tweezers\"\nallow_actions = [\"query\", \"update\"]\n")
+	dir := t.TempDir()
+	failingPlanPath := filepath.Join(dir, "failing-plan.json")
+	failingPlan := `{"steps":[{"action":"update","sql":"update users set name = 'changed' where id = 1"},{"action":"update","sql":"update users set name = 'bad'"}]}`
+	if err := os.WriteFile(failingPlanPath, []byte(failingPlan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", failingPlanPath})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal tx error output: %v", err)
+	}
+	if payload["code"] != "missing_where" {
+		t.Fatalf("expected missing_where for failing tx, got %#v", payload)
+	}
+
+	verifyOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select name from users where id = 1"})
+	})
+	var verifyPayload map[string]any
+	if err := json.Unmarshal([]byte(verifyOut), &verifyPayload); err != nil {
+		t.Fatalf("unmarshal verify output: %v", err)
+	}
+	verifyRows := verifyPayload["data"].(map[string]any)["rows"].([]any)
+	if verifyRows[0].(map[string]any)["name"] != "user" {
+		t.Fatalf("transaction should have rolled back, got %#v", verifyPayload)
+	}
+
+	successPlanPath := filepath.Join(dir, "success-plan.json")
+	successPlan := `{"steps":[{"action":"query","sql":"select id from users where id = 1"},{"action":"update","sql":"update users set name = 'ok' where id = 1","max_rows_affected":1}]}`
+	if err := os.WriteFile(successPlanPath, []byte(successPlan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	successOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", successPlanPath})
+	})
+	var successPayload map[string]any
+	if err := json.Unmarshal([]byte(successOut), &successPayload); err != nil {
+		t.Fatalf("unmarshal tx success output: %v", err)
+	}
+	if successPayload["kind"] != "tx_result" {
+		t.Fatalf("expected tx_result, got %#v", successPayload)
+	}
+	steps := successPayload["data"].(map[string]any)["steps"].([]any)
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 tx steps, got %#v", successPayload)
+	}
+
+	schemaPlanPath := filepath.Join(dir, "schema-plan.json")
+	schemaPlan := `{"steps":[{"action":"schema","sql":"alter table users add column email text"}]}`
+	if err := os.WriteFile(schemaPlanPath, []byte(schemaPlan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	schemaOut := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", schemaPlanPath})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var schemaPayload map[string]any
+	if err := json.Unmarshal([]byte(schemaOut), &schemaPayload); err != nil {
+		t.Fatalf("unmarshal schema tx output: %v", err)
+	}
+	if schemaPayload["code"] != "tx_unsupported_action" {
+		t.Fatalf("expected tx_unsupported_action, got %#v", schemaPayload)
 	}
 }
 
@@ -481,6 +653,10 @@ func captureStdout(t *testing.T, fn func() error) string {
 }
 
 func makeSQLiteFixture(t *testing.T, rows int) string {
+	return makeSQLiteFixtureWithExtras(t, rows, "")
+}
+
+func makeSQLiteFixtureWithExtras(t *testing.T, rows int, extras string) string {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -501,13 +677,18 @@ func makeSQLiteFixture(t *testing.T, rows int) string {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	raw := `
+	modeLine := `mode = "Lantern"`
+	if strings.Contains(extras, `mode = "`) {
+		modeLine = ""
+	}
+	raw := fmt.Sprintf(`
 [connection]
 engine = "sqlite"
-path = "` + dbPath + `"
-mode = "Lantern"
+path = "%s"
+%s
 tags = ["local"]
-`
+%s
+`, dbPath, modeLine, extras)
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}

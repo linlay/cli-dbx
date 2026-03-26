@@ -13,6 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
+	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/conn"
 )
 
@@ -75,6 +76,35 @@ type RelationInfo struct {
 	Name       string   `json:"name,omitempty"`
 }
 
+type TxPlan struct {
+	Steps []TxStep `json:"steps"`
+}
+
+type TxStep struct {
+	Action          action.Action `json:"action"`
+	SQL             string        `json:"sql"`
+	MaxRowsAffected int           `json:"max_rows_affected,omitempty"`
+}
+
+type TxStepResult struct {
+	Index        int           `json:"index"`
+	Action       action.Action `json:"action"`
+	RowsAffected int64         `json:"rows_affected,omitempty"`
+	Query        *QueryResult  `json:"query,omitempty"`
+}
+
+type TxRunResult struct {
+	Steps []TxStepResult `json:"steps"`
+}
+
+type queryRunner interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+type execRunner interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func Open(spec conn.Spec) (*sql.DB, error) {
 	db, err := sql.Open(spec.Driver, spec.DSN)
 	if err != nil {
@@ -105,8 +135,100 @@ func Query(ctx context.Context, spec conn.Spec, sqlText string, offset, limit in
 	defer db.Close()
 	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
+	return queryWithRunner(ctx, db, sqlText, offset, limit)
+}
 
-	rows, err := db.QueryContext(ctx, sqlText)
+func Execute(ctx context.Context, spec conn.Spec, sqlText string) (int64, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlText)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func ExecuteGuarded(ctx context.Context, spec conn.Spec, sqlText string, maxRows int) (int64, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	count, err := executeWithRunner(ctx, tx, sqlText, maxRows)
+	if err != nil {
+		return count, err
+	}
+	if err := tx.Commit(); err != nil {
+		return count, err
+	}
+	return count, nil
+}
+
+func RunTxPlan(ctx context.Context, spec conn.Spec, plan TxPlan, queryLimit, defaultMaxRows int) (TxRunResult, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return TxRunResult{}, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return TxRunResult{}, err
+	}
+	defer tx.Rollback()
+
+	result := TxRunResult{Steps: make([]TxStepResult, 0, len(plan.Steps))}
+	for i, step := range plan.Steps {
+		item := TxStepResult{
+			Index:  i,
+			Action: step.Action,
+		}
+		switch step.Action {
+		case action.Query:
+			queryResult, err := queryWithRunner(ctx, tx, step.SQL, 0, queryLimit)
+			if err != nil {
+				return TxRunResult{}, err
+			}
+			item.Query = &queryResult
+		case action.Update:
+			maxRows := step.MaxRowsAffected
+			if maxRows <= 0 {
+				maxRows = defaultMaxRows
+			}
+			count, err := executeWithRunner(ctx, tx, step.SQL, maxRows)
+			if err != nil {
+				return TxRunResult{}, err
+			}
+			item.RowsAffected = count
+		default:
+			return TxRunResult{}, fmt.Errorf("transaction action %s is not supported", step.Action)
+		}
+		result.Steps = append(result.Steps, item)
+	}
+	if err := tx.Commit(); err != nil {
+		return TxRunResult{}, err
+	}
+	return result, nil
+}
+
+func queryWithRunner(ctx context.Context, runner queryRunner, sqlText string, offset, limit int) (QueryResult, error) {
+	rows, err := runner.QueryContext(ctx, sqlText)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -174,47 +296,14 @@ func Query(ctx context.Context, spec conn.Spec, sqlText string, offset, limit in
 	return result, nil
 }
 
-func Execute(ctx context.Context, spec conn.Spec, sqlText string) (int64, error) {
-	db, err := Open(spec)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
-	defer cancel()
-	res, err := db.ExecContext(ctx, sqlText)
-	if err != nil {
-		return 0, err
-	}
-	count, _ := res.RowsAffected()
-	return count, nil
-}
-
-func ExecuteGuarded(ctx context.Context, spec conn.Spec, sqlText string, maxRows int) (int64, error) {
-	db, err := Open(spec)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
-	defer cancel()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	res, err := tx.ExecContext(ctx, sqlText)
+func executeWithRunner(ctx context.Context, runner execRunner, sqlText string, maxRows int) (int64, error) {
+	res, err := runner.ExecContext(ctx, sqlText)
 	if err != nil {
 		return 0, err
 	}
 	count, _ := res.RowsAffected()
 	if maxRows > 0 && count > int64(maxRows) {
 		return count, fmt.Errorf("rows affected %d exceeds max-rows-affected %d", count, maxRows)
-	}
-	if err := tx.Commit(); err != nil {
-		return count, err
 	}
 	return count, nil
 }

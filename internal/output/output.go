@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
 	"github.com/linlay/cli-dbx/internal/mode"
@@ -22,6 +23,7 @@ type Envelope struct {
 	Mode           string              `json:"mode"`
 	Engine         string              `json:"engine"`
 	Connection     string              `json:"connection"`
+	Action         action.Action       `json:"action,omitempty"`
 	StatementClass mode.StatementClass `json:"statement_class,omitempty"`
 	RiskLevel      string              `json:"risk_level,omitempty"`
 	RowCount       int                 `json:"row_count,omitempty"`
@@ -42,6 +44,9 @@ func PrintEnvelope(format string, env Envelope) error {
 	case "table":
 		fmt.Printf("ok: %t\n", env.OK)
 		fmt.Printf("connection: %s (%s)\n", env.Connection, env.Engine)
+		if env.Action != "" {
+			fmt.Printf("action: %s\n", env.Action)
+		}
 		if env.StatementClass != "" {
 			fmt.Printf("statement_class: %s\n", env.StatementClass)
 			fmt.Printf("risk_level: %s\n", env.RiskLevel)
@@ -73,6 +78,9 @@ func compactPayload(env Envelope) map[string]any {
 	}
 	if env.StatementClass != "" {
 		payload["class"] = env.StatementClass
+	}
+	if env.Action != "" {
+		payload["action"] = env.Action
 	}
 	if env.Data != nil {
 		payload["data"] = env.Data
@@ -155,7 +163,7 @@ func QuerySummary(result db.QueryResult, nextCursor string) string {
 	returned := len(result.Rows)
 	switch {
 	case result.SeenCount == 0:
-		return "no rows found; refine the exec only if you expected data"
+		return "no rows found; refine the query only if you expected data"
 	case result.Truncated:
 		if nextCursor != "" {
 			return fmt.Sprintf("%d rows found; returned %d rows; continue with --cursor %s", result.SeenCount, returned, nextCursor)
@@ -168,12 +176,13 @@ func QuerySummary(result db.QueryResult, nextCursor string) string {
 
 func ConnectionMeta(spec conn.Spec) map[string]any {
 	return map[string]any{
-		"target":       spec.DisplayTarget,
-		"environment":  spec.Environment,
-		"role":         spec.Role,
-		"read_only":    spec.ReadOnly,
-		"tags":         spec.Tags,
-		"secretSource": spec.SecretSources,
+		"target":        spec.DisplayTarget,
+		"environment":   spec.Environment,
+		"role":          spec.Role,
+		"read_only":     spec.ReadOnly,
+		"allow_actions": action.Strings(spec.AllowActions),
+		"tags":          spec.Tags,
+		"secretSource":  spec.SecretSources,
 	}
 }
 

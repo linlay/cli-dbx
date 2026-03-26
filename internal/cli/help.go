@@ -12,7 +12,12 @@ func rootHelp() string {
 Use:
   conn      test or show a connection
   inspect   inspect schema, table, or connection
-  exec      run any SQL
+  query     run read-only SQL
+  update    run row-changing SQL
+  schema    run DDL SQL
+  admin     run admin SQL
+  exec      compatibility command for any SQL
+  tx        run a structured transaction plan
   import    load csv/json into a table
   export    write a table to a file
   version   show build version
@@ -20,11 +25,12 @@ Use:
 Flow:
   1. dbx conn test <name>
   2. dbx inspect table <name> <table>
-  3. dbx exec <name> 'select ...'
+  3. dbx query <name> 'select ...'
   Config files live in ~/.config/dbx/<name>.toml.
 
 Example:
-  dbx exec local-pg 'select * from users order by id' --page-size 100
+  dbx query local-pg 'select * from users order by id' --page-size 100
+  dbx update local-pg 'update users set active = 1 where id = 1'
   dbx version
 `
 }
@@ -35,7 +41,7 @@ func helpExamples() string {
 PostgreSQL: inspect users
   dbx conn test local-pg
   dbx inspect table local-pg users
-  dbx exec local-pg 'select id, email from users limit 10'
+  dbx query local-pg 'select id, email from users limit 10'
 
 MySQL: import customers.csv
   dbx conn test local-mysql
@@ -43,12 +49,11 @@ MySQL: import customers.csv
   dbx import file ./customers.csv local-mysql customers --mode Tweezers
 
 SQLite: continue a paged read
-  dbx exec local-sqlite 'select * from users order by id' --page-size 100
-  dbx exec local-sqlite 'select * from users order by id' --cursor 100
+  dbx query local-sqlite 'select * from users order by id' --page-size 100
+  dbx query local-sqlite 'select * from users order by id' --cursor 100
 
-SQLite: export users to csv
-  dbx inspect table users
-  dbx export table users local-sqlite ./users.csv --format csv
+PostgreSQL: run a transaction plan
+  dbx tx run local-pg --plan ./plan.json
 `
 }
 
@@ -56,7 +61,7 @@ func connHelp() string {
 	return `dbx conn
 
 When to use:
-  Check a target before inspect or exec.
+  Check a target before inspect or query.
 
 Commands:
   list
@@ -69,7 +74,7 @@ Examples:
   dbx conn list
 
 Next:
-  Use inspect or exec.
+  Use inspect or query.
 `
 }
 
@@ -87,18 +92,18 @@ Commands:
 Examples:
   dbx inspect table local-pg users
   dbx inspect schema local-pg
-  dbx inspect table local-pg users
+  dbx inspect connection local-pg
 
 Next:
-  Use exec after you know the table shape.
+  Use query after you know the table shape.
 `
 }
 
-func execHelp() string {
-	return `dbx exec
+func sqlCommandHelp(command string, summary string, examples []string) string {
+	return fmt.Sprintf(`dbx %s
 
 When to use:
-  Run any SQL: read, write, ddl, or admin.
+  %s
 
 Minimum:
   <conn> '<statement>'
@@ -106,9 +111,9 @@ Minimum:
   file <conn> <path.sql>
 
 Facts:
+  DBX maps each statement to an action and checks the connection allow_actions list.
   Read results return up to 100 rows by default.
   Multiple statements are blocked by default.
-  Use --verbose only when you need more context.
   Keep the same order by when you continue with --cursor.
 
 Options:
@@ -129,20 +134,102 @@ Modes:
   Crown     admin access
   Wildfire  unrestricted
 
-Mode examples:
-  --mode Tweezers   load or edit rows
-  --mode Chisel     create or alter tables
-  --mode Forge      mixed data + schema work
-
 Examples:
-  dbx exec local-pg 'select * from users order by id'
-  dbx exec local-pg 'select * from users order by id' --cursor 100
-  dbx exec local-pg 'select * from users order by id' --page-size 200
-  dbx exec dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select now()'
-  dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
+  %s
 
 Next:
   Use inspect first if the table shape is unknown.
+`, command, summary, joinHelpExamples(examples))
+}
+
+func joinHelpExamples(examples []string) string {
+	if len(examples) == 0 {
+		return ""
+	}
+	out := examples[0]
+	for i := 1; i < len(examples); i++ {
+		out += "\n  " + examples[i]
+	}
+	return out
+}
+
+func execHelp() string {
+	return `dbx exec
+
+When to use:
+  Compatibility command that runs any supported SQL after DBX classifies it.
+
+Minimum:
+  <conn> '<statement>'
+  dsn <engine> <dsn> '<statement>'
+  file <conn> <path.sql>
+
+Facts:
+  Prefer query, update, schema, or admin when you want an explicit action.
+  Read results return up to 100 rows by default.
+  Multiple statements are blocked by default.
+  Keep the same order by when you continue with --cursor.
+
+Examples:
+  dbx exec local-pg 'select * from users order by id'
+  dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
+
+Next:
+  Use explicit action commands for tighter control.
+`
+}
+
+func queryHelp() string {
+	return sqlCommandHelp("query", "Run read-only SQL.", []string{
+		"dbx query local-pg 'select * from users order by id'",
+		"dbx query local-pg 'select * from users order by id' --cursor 100",
+		"dbx query dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select now()'",
+	})
+}
+
+func updateHelp() string {
+	return sqlCommandHelp("update", "Run insert, update, delete, or merge SQL.", []string{
+		"dbx update local-pg 'update users set active = 1 where id = 1' --mode Tweezers",
+		"dbx update local-pg 'delete from users where archived = 1' --mode Tweezers",
+		"dbx update file local-pg ./change.sql",
+	})
+}
+
+func schemaHelp() string {
+	return sqlCommandHelp("schema", "Run create, alter, drop, rename, or truncate SQL.", []string{
+		"dbx schema local-pg 'create table audit_log (id bigint primary key)' --mode Chisel",
+		"dbx schema local-pg 'alter table users add column timezone text' --mode Chisel",
+		"dbx schema file local-pg ./schema.sql",
+	})
+}
+
+func adminHelp() string {
+	return sqlCommandHelp("admin", "Run supported admin SQL such as grant, revoke, set, or vacuum.", []string{
+		"dbx admin local-pg 'analyze users' --mode Crown",
+		"dbx admin local-sqlite 'vacuum' --mode Crown",
+		"dbx admin file local-pg ./admin.sql",
+	})
+}
+
+func txHelp() string {
+	return `dbx tx
+
+When to use:
+  Run a structured multi-step transaction in one DBX call.
+
+Commands:
+  run <conn> --plan <path.json>
+
+Facts:
+  tx run only accepts query and update steps.
+  Every step runs on one connection inside one transaction.
+  Any failure rolls the whole transaction back.
+
+Example:
+  dbx tx run local-pg --plan ./plan.json
+
+Next:
+  Use query to verify the committed result.
 `
 }
 
@@ -156,7 +243,7 @@ Example:
   dbx import file ./customers.csv local-mysql customers --mode Tweezers
 
 Next:
-  Use exec to verify imported rows.
+  Use query to verify imported rows.
 `
 }
 
@@ -205,6 +292,16 @@ func printHelp(topic string) error {
 		fmt.Print(inspectHelp())
 	case "exec":
 		fmt.Print(execHelp())
+	case "query":
+		fmt.Print(queryHelp())
+	case "update":
+		fmt.Print(updateHelp())
+	case "schema":
+		fmt.Print(schemaHelp())
+	case "admin":
+		fmt.Print(adminHelp())
+	case "tx":
+		fmt.Print(txHelp())
 	case "import":
 		fmt.Print(importHelp())
 	case "export":
