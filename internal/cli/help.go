@@ -16,7 +16,6 @@ Use:
   update    run row-changing SQL
   schema    run DDL SQL
   admin     run admin SQL
-  exec      compatibility command for any SQL
   tx        run a structured transaction plan
   import    load csv/json into a table
   export    write a table to a file
@@ -53,7 +52,8 @@ SQLite: continue a paged read
   dbx query local-sqlite 'select * from users order by id' --cursor 100
 
 PostgreSQL: run a transaction plan
-  dbx tx run local-pg --plan ./plan.json
+  {"steps":[{"action":"query","sql":"select id from users where id = 1"},{"action":"update","sql":"update users set active = 1 where id = 1","max_rows_affected":1}]}
+  dbx tx local-pg --plan ./plan.json
 `
 }
 
@@ -153,32 +153,6 @@ func joinHelpExamples(examples []string) string {
 	return out
 }
 
-func execHelp() string {
-	return `dbx exec
-
-When to use:
-  Compatibility command that runs any supported SQL after DBX classifies it.
-
-Minimum:
-  <conn> '<statement>'
-  dsn <engine> <dsn> '<statement>'
-  file <conn> <path.sql>
-
-Facts:
-  Prefer query, update, schema, or admin when you want an explicit action.
-  Read results return up to 100 rows by default.
-  Multiple statements are blocked by default.
-  Keep the same order by when you continue with --cursor.
-
-Examples:
-  dbx exec local-pg 'select * from users order by id'
-  dbx exec local-sqlite 'create table users (id integer primary key, name text)' --mode Chisel
-
-Next:
-  Use explicit action commands for tighter control.
-`
-}
-
 func queryHelp() string {
 	return sqlCommandHelp("query", "Run read-only SQL.", []string{
 		"dbx query local-pg 'select * from users order by id'",
@@ -217,16 +191,21 @@ func txHelp() string {
 When to use:
   Run a structured multi-step transaction in one DBX call.
 
-Commands:
-  run <conn> --plan <path.json>
+Minimum:
+  <conn> --plan <path.json>
 
 Facts:
-  tx run only accepts query and update steps.
+  tx only accepts query and update steps.
   Every step runs on one connection inside one transaction.
   Any failure rolls the whole transaction back.
+  Use tx when a sequence of reads and writes must commit together.
+
+Example plan:
+  {"steps":[{"action":"query","sql":"select id from users where id = 1"},{"action":"update","sql":"update users set active = 1 where id = 1","max_rows_affected":1}]}
 
 Example:
-  dbx tx run local-pg --plan ./plan.json
+  dbx tx local-pg --plan ./plan.json
+  dbx query local-pg 'select id, active from users where id = 1'
 
 Next:
   Use query to verify the committed result.
@@ -290,8 +269,6 @@ func printHelp(topic string) error {
 		fmt.Print(connHelp())
 	case "inspect":
 		fmt.Print(inspectHelp())
-	case "exec":
-		fmt.Print(execHelp())
 	case "query":
 		fmt.Print(queryHelp())
 	case "update":

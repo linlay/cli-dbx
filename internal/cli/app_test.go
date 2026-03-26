@@ -29,6 +29,9 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	if !strings.Contains(root, "version   show build version") || !strings.Contains(root, "dbx version") {
 		t.Fatalf("root help should include version command, got:\n%s", root)
 	}
+	if strings.Contains(root, "exec      compatibility command") {
+		t.Fatalf("root help should not mention removed exec command, got:\n%s", root)
+	}
 	if strings.Contains(root, "self-describing") || strings.Contains(root, "external docs") {
 		t.Fatalf("root help should omit design commentary, got:\n%s", root)
 	}
@@ -36,7 +39,7 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	examples := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help", "examples"})
 	})
-	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") || !strings.Contains(examples, "--cursor 100") || !strings.Contains(examples, "dbx tx run local-pg --plan ./plan.json") {
+	if !strings.Contains(examples, "PostgreSQL: inspect users") || !strings.Contains(examples, "MySQL: import customers.csv") || !strings.Contains(examples, "--cursor 100") || !strings.Contains(examples, "dbx tx local-pg --plan ./plan.json") {
 		t.Fatalf("help examples should include postgres and mysql examples, got:\n%s", examples)
 	}
 
@@ -59,18 +62,17 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 		t.Fatalf("query help should omit design sections, got:\n%s", queryHelp)
 	}
 
-	execHelp := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"exec", "--help"})
-	})
-	if !strings.Contains(execHelp, "Compatibility command") {
-		t.Fatalf("exec help should explain compatibility mode, got:\n%s", execHelp)
-	}
-
 	txHelp := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"tx", "--help"})
 	})
-	if !strings.Contains(txHelp, "run <conn> --plan <path.json>") || !strings.Contains(txHelp, "Any failure rolls the whole transaction back.") {
+	if !strings.Contains(txHelp, "<conn> --plan <path.json>") || !strings.Contains(txHelp, "Any failure rolls the whole transaction back.") {
 		t.Fatalf("tx help should describe transaction plans, got:\n%s", txHelp)
+	}
+	if strings.Contains(txHelp, "run <conn> --plan <path.json>") {
+		t.Fatalf("tx help should not mention removed run subcommand, got:\n%s", txHelp)
+	}
+	if !strings.Contains(txHelp, "Use tx when a sequence of reads and writes must commit together.") || !strings.Contains(txHelp, `"max_rows_affected":1`) {
+		t.Fatalf("tx help should include multi-step transaction guidance, got:\n%s", txHelp)
 	}
 
 	connHelp := captureStdout(t, func() error {
@@ -92,6 +94,33 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 	})
 	if !strings.Contains(versionHelp, "dbx --version") {
 		t.Fatalf("version help should describe version flag, got:\n%s", versionHelp)
+	}
+}
+
+func TestExecCommandAndHelpTopicAreRemoved(t *testing.T) {
+	if err := New().Run(context.Background(), []string{"help", "exec"}); err == nil || !strings.Contains(err.Error(), `unknown help topic "exec"`) {
+		t.Fatalf("help exec should be removed, got: %v", err)
+	}
+	if err := New().Run(context.Background(), []string{"exec", "--help"}); err == nil || !strings.Contains(err.Error(), `unknown command "exec"`) {
+		t.Fatalf("exec command should be removed, got: %v", err)
+	}
+}
+
+func TestTxRunSubcommandIsRemoved(t *testing.T) {
+	out := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"tx", "run", "local-pg", "--plan", "./plan.json"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal tx run removed output: %v\n%s", err, out)
+	}
+	if payload["code"] != "conn_not_found" || payload["conn"] != "run" {
+		t.Fatalf("tx run form should be treated as invalid old syntax, got %#v", payload)
 	}
 }
 
@@ -123,7 +152,7 @@ func TestVersionOutputsEmbeddedBuildInfo(t *testing.T) {
 	}
 }
 
-func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
+func TestQueryDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 125)
 	out := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id, name from users order by id"})
@@ -133,8 +162,8 @@ func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if got := payload["kind"]; got != "exec_result" {
-		t.Fatalf("kind = %v, want exec_result", got)
+	if got := payload["kind"]; got != "query_result" {
+		t.Fatalf("kind = %v, want query_result", got)
 	}
 	if got := payload["action"]; got != "query" {
 		t.Fatalf("action = %v, want query", got)
@@ -162,7 +191,7 @@ func TestExecDefaultJSONOutputUsesPageSizeAndCursor(t *testing.T) {
 	}
 }
 
-func TestExecRequiresExplicitConnectionName(t *testing.T) {
+func TestQueryRequiresExplicitConnectionName(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 	out := captureStdout(t, func() error {
 		err := New().Run(context.Background(), []string{"query", "--config", configPath, "select id from users order by id"})
@@ -200,7 +229,7 @@ func TestInspectRequiresExplicitConnectionName(t *testing.T) {
 	}
 }
 
-func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
+func TestQueryVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 
 	verbose := captureStdout(t, func() error {
@@ -241,7 +270,7 @@ func TestExecVerboseIncludesMetaAndErrorsUseEnvelope(t *testing.T) {
 	}
 }
 
-func TestExecParsesFlagsAfterPositionals(t *testing.T) {
+func TestActionCommandsParseFlagsAfterPositionals(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 	out := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"update", "--config", configPath, "local-sqlite", "update users set name = 'aaa' where id = 1", "--mode", "Tweezers"})
@@ -255,11 +284,11 @@ func TestExecParsesFlagsAfterPositionals(t *testing.T) {
 	}
 }
 
-func TestExecBlocksMultiStatementButAllowsScopedWriteWithoutAck(t *testing.T) {
+func TestQueryBlocksMultiStatementButAllowsScopedWriteWithoutAck(t *testing.T) {
 	configPath := makeSQLiteFixture(t, 3)
 
 	multiOut := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"exec", "--config", configPath, "local-sqlite", "select 1; select 2"})
+		err := New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select 1; select 2"})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -405,7 +434,7 @@ func TestExportRequiresExplicitConnectionName(t *testing.T) {
 	}
 }
 
-func TestExecSupportsConfigFilePath(t *testing.T) {
+func TestQuerySupportsConfigFilePath(t *testing.T) {
 	configPath := makeSQLiteConfigFileFixture(t, 3)
 	out := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id from users order by id"})
@@ -414,8 +443,8 @@ func TestExecSupportsConfigFilePath(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &payload); err != nil {
 		t.Fatalf("unmarshal output: %v\n%s", err, out)
 	}
-	if payload["kind"] != "exec_result" || payload["conn"] != "local-sqlite" {
-		t.Fatalf("expected exec_result via config file, got %#v", payload)
+	if payload["kind"] != "query_result" || payload["conn"] != "local-sqlite" {
+		t.Fatalf("expected query_result via config file, got %#v", payload)
 	}
 	if payload["action"] != "query" {
 		t.Fatalf("expected action=query via config file, got %#v", payload)
@@ -504,7 +533,6 @@ func TestAllowActionsBlocksWriteCommandsButKeepsQuery(t *testing.T) {
 	for _, args := range [][]string{
 		{"update", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"},
 		{"schema", "--config", configPath, "local-sqlite", "alter table users add column email text"},
-		{"exec", "--config", configPath, "local-sqlite", "update users set name = 'x' where id = 1"},
 	} {
 		out := captureStdout(t, func() error {
 			err := New().Run(context.Background(), args)
@@ -552,7 +580,7 @@ func TestActionCommandsRejectMismatchedSQL(t *testing.T) {
 	}
 }
 
-func TestTxRunRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
+func TestTxRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 	configPath := makeSQLiteFixtureWithExtras(t, 2, "mode = \"Tweezers\"\nallow_actions = [\"query\", \"update\"]\n")
 	dir := t.TempDir()
 	failingPlanPath := filepath.Join(dir, "failing-plan.json")
@@ -562,7 +590,7 @@ func TestTxRunRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", failingPlanPath})
+		err := New().Run(context.Background(), []string{"tx", "--config", configPath, "local-sqlite", "--plan", failingPlanPath})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil
@@ -595,7 +623,7 @@ func TestTxRunRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	successOut := captureStdout(t, func() error {
-		return New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", successPlanPath})
+		return New().Run(context.Background(), []string{"tx", "--config", configPath, "local-sqlite", "--plan", successPlanPath})
 	})
 	var successPayload map[string]any
 	if err := json.Unmarshal([]byte(successOut), &successPayload); err != nil {
@@ -615,7 +643,7 @@ func TestTxRunRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	schemaOut := captureStdout(t, func() error {
-		err := New().Run(context.Background(), []string{"tx", "run", "--config", configPath, "local-sqlite", "--plan", schemaPlanPath})
+		err := New().Run(context.Background(), []string{"tx", "--config", configPath, "local-sqlite", "--plan", schemaPlanPath})
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			return nil

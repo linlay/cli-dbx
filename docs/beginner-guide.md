@@ -6,7 +6,7 @@
 
 `dbx` 不是传统数据库 GUI，它更像是一个“有安全边界的数据库执行器”。
 
-如果你想看这套边界为什么这样设计、`allow_actions` 和 `tx run` 的约束是什么，可以继续看仓库根目录的 [CLAUDE.md](../CLAUDE.md)。
+如果你想看这套边界为什么这样设计、`allow_actions` 和 `tx` 的约束是什么，可以继续看仓库根目录的 [CLAUDE.md](../CLAUDE.md)。
 
 你可以把它想象成：
 
@@ -111,7 +111,37 @@ id,name
 ./dbx query local-sqlite 'select * from users order by id' --cursor 100
 ```
 
-## 5. 如果你用 PostgreSQL 或 MySQL
+## 5. 连续动作用 `tx`
+
+如果你只是做一条 SQL，继续用 `query`、`update`、`schema` 就够了。
+
+如果你需要一组有顺序依赖、并且必须一起成功或一起回滚的动作，用 `tx`。它会把整个 plan 放在同一个连接、同一个事务里执行。
+
+最小 `plan.json` 例子：
+
+```json
+{
+  "steps": [
+    {"action": "query", "sql": "select id from users where id = 1"},
+    {"action": "update", "sql": "update users set active = 1 where id = 1", "max_rows_affected": 1}
+  ]
+}
+```
+
+执行：
+
+```bash
+./dbx tx local-pg --plan ./plan.json
+./dbx query local-pg 'select id, active from users where id = 1'
+```
+
+记住这几个限制：
+
+- `tx` 目前只支持 `query` 和 `update`
+- 不支持把 `schema` 或 `admin` 放进事务计划
+- 不支持跨连接事务，也不支持跨多次 CLI 调用保留事务会话
+
+## 6. 如果你用 PostgreSQL 或 MySQL
 
 ### PostgreSQL
 
@@ -148,7 +178,7 @@ export MYSQL_PASSWORD='secret'
 ./dbx conn test local-mysql
 ```
 
-## 6. 看不懂报错时先排这几个点
+## 7. 看不懂报错时先排这几个点
 
 ### 连接不存在
 
@@ -174,7 +204,7 @@ export MYSQL_PASSWORD='secret'
 检查 `path` 是不是你预期的文件位置。  
 如果你用相对路径，它是相对于配置文件所在目录，不是相对于命令执行时的当前目录。
 
-## 7. 推荐学习顺序
+## 8. 推荐学习顺序
 
 建议按这个顺序熟悉 `dbx`：
 
@@ -182,4 +212,4 @@ export MYSQL_PASSWORD='secret'
 2. 学会 `conn test`
 3. 学会 `query` / `update` / `schema` 和 `inspect`
 4. 再开始用 `import` 和 `export`
-5. 最后再碰 `tx run` 和高权限 mode
+5. 最后再碰 `tx` 和高权限 mode

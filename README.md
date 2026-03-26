@@ -65,10 +65,27 @@ tags = ["local"]
 ./dbx query dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select 1'
 ```
 
+如果你需要一组必须一起成功或一起回滚的连续动作，用 `tx`：
+
+```json
+{
+  "steps": [
+    {"action": "query", "sql": "select id from users where id = 1"},
+    {"action": "update", "sql": "update users set active = 1 where id = 1", "max_rows_affected": 1}
+  ]
+}
+```
+
+```bash
+./dbx tx local-pg --plan ./plan.json
+./dbx query local-pg 'select id, active from users where id = 1'
+```
+
 说明：
 
 - 优先使用 `query` / `update` / `schema` / `admin`
-- `exec` 仍然保留给旧脚本兼容
+- 需要原子性的多步动作时，用 `tx`
+- `tx` 只支持 `query` / `update`，不支持 `schema` / `admin`
 - 分页读取时继续传回同一条 SQL 和 `--cursor`
 
 ## 3. 配置说明
@@ -118,7 +135,7 @@ allow_actions = ["query"]
 - `mode` 控制默认风险等级
 - `allow_actions` 控制这个连接允许哪些命令动作
 
-如果你要理解 `mode` 和 `allow_actions` 的关系、为什么 `tx run` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
+如果你要理解 `mode` 和 `allow_actions` 的关系、为什么 `tx` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
 
 也可以直接参考：
 

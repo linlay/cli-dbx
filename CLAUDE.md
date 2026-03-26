@@ -9,9 +9,8 @@
 - 连接管理：`conn list / show / test`
 - 结构查看：`inspect schema / table / connection`
 - 显式 SQL 动作：`query / update / schema / admin`
-- 兼容入口：`exec`
 - 文件导入导出：`import` / `export`
-- 批处理事务：`tx run`
+- 批处理事务：`tx`
 
 设计重点：
 
@@ -119,7 +118,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 
 ### 事务计划
 
-`tx run` 读取 JSON 计划文件：
+`tx` 读取 JSON 计划文件：
 
 ```json
 {
@@ -130,7 +129,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 }
 ```
 
-`tx run` v1 只允许 `query` 和 `update` 步骤。
+`tx` v1 只允许 `query` 和 `update` 步骤。
 
 ### 输出 Envelope
 
@@ -158,8 +157,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 - `dbx update <conn> '<sql>'`
 - `dbx schema <conn> '<sql>'`
 - `dbx admin <conn> '<sql>'`
-- `dbx exec ...`
-- `dbx tx run <conn> --plan <path.json>`
+- `dbx tx <conn> --plan <path.json>`
 - `dbx import file ...`
 - `dbx export table ...`
 
@@ -167,8 +165,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 
 - 默认只允许单语句 SQL
 - `query/update/schema/admin` 要求 SQL 类型和命令动作匹配
-- `exec` 允许兼容调用，但内部仍会分类并做同样的动作校验
-- `tx run` 为单连接、单次调用、单事务
+- `tx` 为单连接、单次调用、单事务
 
 错误语义重点：
 
@@ -190,8 +187,8 @@ allow_actions = ["query", "update", "schema", "admin"]
 - `README.md` 只保留操作说明、配置示例、简单测试和排查。
 - `docs/beginner-guide.md` 只讲新手视角，不承载架构事实。
 - `allow_actions` 是 DBX 层最重要的能力边界之一，任何变更都必须补测试。
-- `tx run` 的边界优先保持简单和可验证，不要直接扩展到跨进程会话事务。
-- 对外词汇优先使用 `query / update / schema / admin`，避免在新文案里继续扩大 `exec` 的主入口地位。
+- `tx` 的边界优先保持简单和可验证，不要直接扩展到跨进程会话事务。
+- 对外词汇优先使用 `query / update / schema / admin / tx`，保持动作边界清晰。
 - 用户可见能力变更需要同步更新：
   - CLI help
   - `README.md`
@@ -233,7 +230,6 @@ go test ./...
 
 - `dbx` 不是数据库权限系统的替代品；它是在数据库账号之外再加一层 DBX 侧保护。
 - `allow_actions` 只能收紧 DBX 的能力边界，不能放大数据库账号本身没有的权限。
-- `tx run` 不支持跨连接事务，也不支持跨多次 CLI 调用的事务会话。
-- `tx run` 不支持 `schema` 或 `admin`，主要是为了保持回滚语义可预期。
+- `tx` 不支持跨连接事务，也不支持跨多次 CLI 调用的事务会话。
+- `tx` 不支持 `schema` 或 `admin`，主要是为了保持回滚语义可预期。
 - 生产态连接默认更保守；带 `prod` 特征的连接会阻止高风险动作配置。
-- `exec` 仍会存在一段时间，但推荐路径已经切到显式动作命令。

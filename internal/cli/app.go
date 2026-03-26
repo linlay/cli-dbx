@@ -42,8 +42,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "conn":
 		return a.runConn(ctx, args[1:])
-	case "exec":
-		return a.runSQLCommand(ctx, "exec", "", args[1:])
 	case "query":
 		return a.runSQLCommand(ctx, "query", action.Query, args[1:])
 	case "update":
@@ -165,7 +163,7 @@ func (a *App) resolveSpec(ctx context.Context, configPath, name, dsn, engine, se
 	return spec, nil
 }
 
-type execInput struct {
+type sqlInput struct {
 	name   string
 	dsn    string
 	engine string
@@ -178,34 +176,34 @@ type txRunInput struct {
 	planPath string
 }
 
-func parseSQLInput(command string, args []string) (execInput, error) {
+func parseSQLInput(command string, args []string) (sqlInput, error) {
 	if len(args) == 0 {
-		return execInput{}, fmt.Errorf("%s requires: <conn> <sql>, %s file <conn> <path>, or %s dsn <engine> <dsn> <sql>", command, command, command)
+		return sqlInput{}, fmt.Errorf("%s requires: <conn> <sql>, %s file <conn> <path>, or %s dsn <engine> <dsn> <sql>", command, command, command)
 	}
 	if args[0] == "dsn" {
 		if len(args) < 4 {
-			return execInput{}, fmt.Errorf("%s dsn requires: <engine> <dsn> <sql>", command)
+			return sqlInput{}, fmt.Errorf("%s dsn requires: <engine> <dsn> <sql>", command)
 		}
-		return execInput{engine: args[1], dsn: args[2], sql: args[3]}, nil
+		return sqlInput{engine: args[1], dsn: args[2], sql: args[3]}, nil
 	}
 	if args[0] == "file" {
 		if len(args) < 3 {
-			return execInput{}, fmt.Errorf("%s file requires: <conn> <path>", command)
+			return sqlInput{}, fmt.Errorf("%s file requires: <conn> <path>", command)
 		}
-		return execInput{name: args[1], file: args[2]}, nil
+		return sqlInput{name: args[1], file: args[2]}, nil
 	}
 	if len(args) < 2 {
-		return execInput{}, fmt.Errorf("%s requires: <conn> <sql>, %s file <conn> <path>, or %s dsn <engine> <dsn> <sql>", command, command, command)
+		return sqlInput{}, fmt.Errorf("%s requires: <conn> <sql>, %s file <conn> <path>, or %s dsn <engine> <dsn> <sql>", command, command, command)
 	}
-	return execInput{name: args[0], sql: args[1]}, nil
+	return sqlInput{name: args[0], sql: args[1]}, nil
 }
 
-func parseTxRunInput(args []string, planPath string) (txRunInput, error) {
+func parseTxInput(args []string, planPath string) (txRunInput, error) {
 	if strings.TrimSpace(planPath) == "" {
-		return txRunInput{}, errors.New("tx run requires --plan <path>")
+		return txRunInput{}, errors.New("tx requires --plan <path>")
 	}
 	if len(args) < 1 {
-		return txRunInput{}, errors.New("tx run requires: <conn> --plan <path>")
+		return txRunInput{}, errors.New("tx requires: <conn> --plan <path>")
 	}
 	return txRunInput{name: args[0], planPath: planPath}, nil
 }
@@ -390,7 +388,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	if common.dryRun {
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
-			Kind:           "exec_plan",
+			Kind:           "sql_plan",
 			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
@@ -422,7 +420,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 		nextCursorValue := nextCursor(cursorOffset, common.pageSize, result)
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:             true,
-			Kind:           "exec_result",
+			Kind:           "query_result",
 			Mode:           string(spec.Mode),
 			Engine:         spec.Engine,
 			Connection:     spec.Name,
@@ -703,13 +701,10 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		return printHelp("tx")
 	}
-	if args[0] != "run" {
-		return fmt.Errorf("unknown tx subcommand %q", args[0])
-	}
 	fs := newFlagSet("tx")
 	common := a.bindCommon(fs)
 	planPath := fs.String("plan", "", "transaction plan path")
-	if err := fs.Parse(normalizeFlagArgs(args[1:], map[string]bool{
+	if err := fs.Parse(normalizeFlagArgs(args, map[string]bool{
 		"--config":            true,
 		"--mode":              true,
 		"--format":            true,
@@ -722,7 +717,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	input, err := parseTxRunInput(fs.Args(), *planPath)
+	input, err := parseTxInput(fs.Args(), *planPath)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
 	}
@@ -754,7 +749,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 			Data: map[string]any{
 				"steps": plan.Steps,
 			},
-			Next:    "tx_run",
+			Next:    "tx",
 			AuditID: audit.ID("tx-plan:" + spec.Name),
 			Meta:    output.ConnectionMeta(spec),
 			Verbose: common.verbose,
@@ -969,7 +964,7 @@ func nextForClass(class mode.StatementClass, more bool) string {
 	}
 	switch class {
 	case mode.ClassRead:
-		return "refine_exec"
+		return "refine_sql"
 	case mode.ClassWriteData, mode.ClassDDL, mode.ClassAdmin:
 		return "inspect_table"
 	default:
@@ -1026,9 +1021,9 @@ func hintForCode(code string) string {
 	case "invalid_cursor":
 		return "Use --cursor <non-negative integer> from a previous result."
 	case "missing_plan":
-		return "Use tx run <conn> --plan <path>."
+		return "Use tx <conn> --plan <path>."
 	case "tx_unsupported_action":
-		return "Use only query and update steps in tx run."
+		return "Use only query and update steps in tx."
 	case "missing_sql":
 		return "Provide the required command arguments, such as <conn> <sql> or --plan <path>."
 	default:
@@ -1041,17 +1036,17 @@ func nextForCode(code string) string {
 	case "conn_not_found", "no_connection":
 		return "inspect_connection"
 	case "multiple_statements_blocked", "unknown_statement":
-		return "refine_exec"
+		return "refine_sql"
 	case "action_blocked", "action_mismatch":
-		return "refine_exec"
+		return "refine_sql"
 	case "missing_where":
-		return "refine_exec"
+		return "refine_sql"
 	case "invalid_cursor":
 		return "fetch_more"
 	case "missing_plan", "tx_unsupported_action":
-		return "tx_run"
+		return "tx"
 	default:
-		return "refine_exec"
+		return "refine_sql"
 	}
 }
 
