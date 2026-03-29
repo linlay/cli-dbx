@@ -2,10 +2,13 @@ module github.com/linlay/cli-dbx
 
 go 1.22
 
+replace github.com/spf13/cobra => ./third_party/cobra
+
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jackc/pgx/v5 v5.7.2
+	github.com/spf13/cobra v1.10.1
 	modernc.org/sqlite v1.34.2
 )
 
