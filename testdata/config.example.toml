@@ -2,4 +2,6 @@
 engine = "postgres"
 dsn_env = "LOCAL_PG_DSN"
 allow_actions = ["query"]
+# Optional: omit or leave empty to allow all tables.
+allow_tables = ["users", "public.audit_*"]
 tags = ["dev", "local"]

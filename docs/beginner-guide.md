@@ -41,6 +41,14 @@
 - 改表：`["query", "schema"]`
 - 查、改数据、改表：`["query", "update", "schema"]`
 
+### allow_tables
+
+`allow_tables` 可以进一步限制这个连接能访问哪些表。
+
+- 不写：不限制表
+- 只允许用户表：`allow_tables = ["users"]`
+- 允许多个表或前缀：`allow_tables = ["users", "orders", "audit_*"]`
+
 ## 3. 用 SQLite 入门最简单
 
 先创建默认配置目录：

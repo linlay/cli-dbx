@@ -111,7 +111,7 @@ Minimum:
   file <conn> <path.sql>
 
 Facts:
-  DBX maps each statement to an action and checks the connection allow_actions list.
+  DBX maps each statement to an action and checks allow_actions and allow_tables.
   Read results return up to 100 rows by default.
   Multiple statements are blocked by default.
   Keep the same order by when you continue with --cursor.

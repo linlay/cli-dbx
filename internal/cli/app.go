@@ -488,6 +488,8 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, "", "", err)
 		}
+		tables = filterTablesByPolicy(spec, tables)
+		relations = filterRelationsByPolicy(spec, relations)
 		return output.PrintEnvelope(common.format, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_schema",
@@ -505,6 +507,9 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Verbose: common.verbose,
 		})
 	case "table":
+		if err := enforceTablePolicy(spec, []string{tableObject(schema, table)}); err != nil {
+			return a.renderError(common.format, common.verbose, spec, action.Query, sqlclass.ClassRead, err)
+		}
 		info, err := db.DescribeTable(ctx, spec, schema, table)
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, "", "", err)
@@ -575,6 +580,9 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	}
 	if !spec.AllowsAction(action.Query) {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, fmt.Errorf("connection %s does not allow action %s", spec.Name, action.Query))
+	}
+	if err := enforceTablePolicy(spec, []string{table}); err != nil {
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
 	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
 	result, err := db.Query(ctx, spec, query, 0, *limit)
@@ -769,7 +777,60 @@ func enforcePolicy(spec conn.Spec, analysis sqlanalyzer.Analysis, expectedAction
 	if analysis.HasUnsafeWrite {
 		return fmt.Errorf("unsafe write blocked: missing WHERE clause")
 	}
+	if err := enforceTablePolicy(spec, analysis.Objects); err != nil {
+		return err
+	}
 	return nil
+}
+
+func enforceTablePolicy(spec conn.Spec, objects []string) error {
+	if !spec.RestrictsTables() {
+		return nil
+	}
+	if len(objects) == 0 {
+		return fmt.Errorf("table access blocked: no table object was identified")
+	}
+	for _, object := range objects {
+		if !spec.AllowsTable(object) {
+			return fmt.Errorf("table access blocked: %s is not allowed by allow_tables", object)
+		}
+	}
+	return nil
+}
+
+func filterTablesByPolicy(spec conn.Spec, tables []db.TableInfo) []db.TableInfo {
+	if !spec.RestrictsTables() {
+		return tables
+	}
+	out := make([]db.TableInfo, 0, len(tables))
+	for _, table := range tables {
+		if spec.AllowsTable(tableObject(table.Schema, table.Name)) || spec.AllowsTable(table.Name) {
+			out = append(out, table)
+		}
+	}
+	return out
+}
+
+func filterRelationsByPolicy(spec conn.Spec, relations []db.RelationInfo) []db.RelationInfo {
+	if !spec.RestrictsTables() {
+		return relations
+	}
+	out := make([]db.RelationInfo, 0, len(relations))
+	for _, relation := range relations {
+		from := tableObject(relation.FromSchema, relation.FromTable)
+		to := tableObject(relation.ToSchema, relation.ToTable)
+		if spec.AllowsTable(from) || spec.AllowsTable(relation.FromTable) || spec.AllowsTable(to) || spec.AllowsTable(relation.ToTable) {
+			out = append(out, relation)
+		}
+	}
+	return out
+}
+
+func tableObject(schema, table string) string {
+	if strings.TrimSpace(schema) == "" {
+		return table
+	}
+	return schema + "." + table
 }
 
 func readSQL(command, inline, path string) (string, error) {
@@ -962,6 +1023,8 @@ func classifyErrorCode(err error) string {
 		return "unknown_statement"
 	case strings.Contains(msg, "does not allow action"):
 		return "action_blocked"
+	case strings.Contains(msg, "table access blocked"):
+		return "table_blocked"
 	case strings.Contains(msg, "requires matching sql"):
 		return "action_mismatch"
 	case strings.Contains(msg, "missing where"):
@@ -991,6 +1054,8 @@ func hintForCode(code string) string {
 		return "Use one supported statement type per command."
 	case "action_blocked":
 		return "Update the connection allow_actions list or use a connection with the required action."
+	case "table_blocked":
+		return "Update the connection allow_tables list or use a connection that can access the table."
 	case "action_mismatch":
 		return "Use the SQL command that matches the statement type, such as query, update, or schema."
 	case "missing_where":
@@ -1014,7 +1079,7 @@ func nextForCode(code string) string {
 		return "inspect_connection"
 	case "multiple_statements_blocked", "unknown_statement":
 		return "refine_sql"
-	case "action_blocked", "action_mismatch":
+	case "action_blocked", "action_mismatch", "table_blocked":
 		return "refine_sql"
 	case "missing_where":
 		return "refine_sql"
@@ -1039,6 +1104,8 @@ func summaryForError(code string) string {
 		return "statement type is blocked by default"
 	case "action_blocked":
 		return "statement blocked by the connection allow_actions policy"
+	case "table_blocked":
+		return "statement blocked by the connection allow_tables policy"
 	case "action_mismatch":
 		return "statement does not match the requested action"
 	case "missing_where":

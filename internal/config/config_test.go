@@ -25,6 +25,7 @@ func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
 engine = "sqlite"
 path = "./data/test.db"
 allow_actions = ["query"]
+allow_tables = ["users", "orders", "public.audit_*"]
 password.file = "./secret.txt"
 `
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
@@ -40,6 +41,9 @@ password.file = "./secret.txt"
 	}
 	if profile.Connection.Path != filepath.Join(configDir, "data", "test.db") {
 		t.Fatalf("sqlite path = %q", profile.Connection.Path)
+	}
+	if len(profile.Connection.AllowTables) != 3 || profile.Connection.AllowTables[0] != "users" || profile.Connection.AllowTables[2] != "public.audit_*" {
+		t.Fatalf("allow_tables = %#v", profile.Connection.AllowTables)
 	}
 	secret, source, err := profile.Connection.Password.Resolve(context.Background())
 	if err != nil {

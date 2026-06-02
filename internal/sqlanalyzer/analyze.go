@@ -25,6 +25,7 @@ type StatementAnalysis struct {
 	Class       sqlclass.StatementClass `json:"class"`
 	Action      string                  `json:"action"`
 	Object      string                  `json:"object,omitempty"`
+	Objects     []string                `json:"objects,omitempty"`
 	HasWhere    bool                    `json:"has_where"`
 	HasLimit    bool                    `json:"has_limit"`
 	UnsafeWrite bool                    `json:"unsafe_write"`
@@ -40,8 +41,8 @@ func Analyze(sql string) Analysis {
 	for _, stmt := range stmts {
 		item := analyzeStatement(stmt)
 		result.Statements = append(result.Statements, item)
-		if item.Object != "" {
-			objectSet[item.Object] = struct{}{}
+		for _, object := range item.Objects {
+			objectSet[object] = struct{}{}
 		}
 		if result.StatementClass == "" || result.StatementClass == sqlclass.ClassUnknown {
 			result.StatementClass = item.Class
@@ -93,7 +94,10 @@ func analyzeStatement(sql string) StatementAnalysis {
 	}
 	item.Action = action
 	item.Class = classifyToken(action)
-	item.Object = extractObject(tokens, actionIndex, action)
+	item.Objects = extractObjects(tokens, action)
+	if len(item.Objects) > 0 {
+		item.Object = item.Objects[0]
+	}
 	if (action == "update" || action == "delete") && !item.HasWhere {
 		item.UnsafeWrite = true
 	}
@@ -115,43 +119,73 @@ func classifyToken(token string) sqlclass.StatementClass {
 	}
 }
 
-func extractObject(tokens []string, actionIndex int, action string) string {
-	nextIdent := func(start int) string {
-		for i := start; i < len(tokens); i++ {
-			token := tokens[i]
-			lower := strings.ToLower(token)
-			switch lower {
-			case "into", "from", "table", "view", "index", "schema", "database", "if", "exists", "only":
+func extractObjects(tokens []string, action string) []string {
+	cteNames := collectCTENames(tokens)
+	objects := map[string]struct{}{}
+	add := func(token string) {
+		ident := cleanIdent(token)
+		if ident == "" {
+			return
+		}
+		if _, ok := cteNames[strings.ToLower(ident)]; ok {
+			return
+		}
+		objects[ident] = struct{}{}
+	}
+	expectTable := false
+	inTableList := false
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		lower := strings.ToLower(token)
+		switch lower {
+		case "from", "join", "into":
+			expectTable = true
+			inTableList = true
+			continue
+		case "update", "truncate":
+			expectTable = true
+			inTableList = false
+			continue
+		case "table", "view":
+			if action == "create" || action == "alter" || action == "drop" || action == "rename" {
+				expectTable = true
+				inTableList = true
+			}
+			continue
+		case "on":
+			if action == "create" && hasToken(tokens, "index") {
+				expectTable = true
+			} else {
+				expectTable = false
+				inTableList = false
+			}
+			continue
+		case "where", "group", "order", "limit", "having", "set", "values", "returning", "using", "with":
+			expectTable = false
+			inTableList = false
+			continue
+		case ",":
+			if inTableList {
+				expectTable = true
+			}
+			continue
+		case "if", "not", "exists", "only":
+			continue
+		}
+		if expectTable {
+			if token == "(" || token == ")" {
 				continue
 			}
-			if token == "(" || token == ")" || token == "," {
-				continue
-			}
-			return cleanIdent(token)
-		}
-		return ""
-	}
-	switch action {
-	case "select", "delete":
-		for i := actionIndex + 1; i < len(tokens); i++ {
-			if strings.EqualFold(tokens[i], "from") {
-				return nextIdent(i + 1)
-			}
-		}
-	case "insert", "replace":
-		return nextIdent(actionIndex + 1)
-	case "update", "truncate":
-		return nextIdent(actionIndex + 1)
-	case "create", "alter", "drop", "rename":
-		return nextIdent(actionIndex + 1)
-	case "merge":
-		for i := actionIndex + 1; i < len(tokens); i++ {
-			if strings.EqualFold(tokens[i], "into") {
-				return nextIdent(i + 1)
-			}
+			add(token)
+			expectTable = false
 		}
 	}
-	return ""
+	out := make([]string, 0, len(objects))
+	for object := range objects {
+		out = append(out, object)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func splitStatements(sql string) []string {
@@ -295,6 +329,66 @@ func findCTEAction(tokens []string) int {
 	return len(tokens)
 }
 
+func collectCTENames(tokens []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(tokens) == 0 || !strings.EqualFold(tokens[0], "with") {
+		return out
+	}
+	i := 1
+	if i < len(tokens) && strings.EqualFold(tokens[i], "recursive") {
+		i++
+	}
+	for i < len(tokens) {
+		name := cleanIdent(tokens[i])
+		if name == "" || classifyToken(strings.ToLower(name)) != sqlclass.ClassUnknown {
+			return out
+		}
+		out[strings.ToLower(name)] = struct{}{}
+		i++
+		if i < len(tokens) && tokens[i] == "(" {
+			i = skipTokenBalanced(tokens, i)
+		}
+		if i >= len(tokens) || !strings.EqualFold(tokens[i], "as") {
+			return out
+		}
+		i++
+		if i >= len(tokens) || tokens[i] != "(" {
+			return out
+		}
+		i = skipTokenBalanced(tokens, i)
+		if i >= len(tokens) || tokens[i] != "," {
+			return out
+		}
+		i++
+	}
+	return out
+}
+
+func skipTokenBalanced(tokens []string, start int) int {
+	depth := 0
+	for i := start; i < len(tokens); i++ {
+		switch tokens[i] {
+		case "(":
+			depth++
+		case ")":
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return len(tokens)
+}
+
+func hasToken(tokens []string, target string) bool {
+	for _, token := range tokens {
+		if strings.EqualFold(token, target) {
+			return true
+		}
+	}
+	return false
+}
+
 func containsKeyword(sql, keyword string) bool {
 	target := strings.ToLower(keyword)
 	for _, token := range tokenize(strings.ToLower(stripComments(sql))) {
@@ -306,7 +400,12 @@ func containsKeyword(sql, keyword string) bool {
 }
 
 func cleanIdent(ident string) string {
-	return strings.Trim(ident, "`\"'")
+	ident = strings.Trim(ident, "`\"'")
+	parts := strings.Split(ident, ".")
+	for i, part := range parts {
+		parts[i] = strings.Trim(part, "`\"'")
+	}
+	return strings.Join(parts, ".")
 }
 
 func (a Analysis) ValidateSingleStatement() error {

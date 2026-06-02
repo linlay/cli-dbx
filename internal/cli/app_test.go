@@ -585,6 +585,94 @@ func TestActionCommandsRejectMismatchedSQL(t *testing.T) {
 	}
 }
 
+func TestAllowTablesBlocksUnlistedSQLObjects(t *testing.T) {
+	configPath := makeSQLiteFixtureWithExtras(t, 3, "allow_actions = [\"query\", \"update\"]\nallow_tables = [\"users\"]\n")
+
+	allowedOut := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"query", "--config", configPath, "local-sqlite", "select id from users order by id"})
+	})
+	var allowedPayload map[string]any
+	if err := json.Unmarshal([]byte(allowedOut), &allowedPayload); err != nil {
+		t.Fatalf("unmarshal allowed output: %v", err)
+	}
+	if allowedPayload["kind"] != "query_result" {
+		t.Fatalf("expected query_result, got %#v", allowedPayload)
+	}
+
+	for _, args := range [][]string{
+		{"query", "--config", configPath, "local-sqlite", "select * from users join orders on orders.user_id = users.id"},
+		{"update", "--config", configPath, "local-sqlite", "update orders set total = 20 where id = 1"},
+	} {
+		out := captureStdout(t, func() error {
+			err := New().Run(context.Background(), args)
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return nil
+			}
+			return err
+		})
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatalf("unmarshal table-blocked output: %v", err)
+		}
+		if payload["code"] != "table_blocked" {
+			t.Fatalf("expected table_blocked, got %#v", payload)
+		}
+	}
+}
+
+func TestAllowTablesAppliesToImportExportInspectAndTx(t *testing.T) {
+	configPath := makeSQLiteFixtureWithExtras(t, 2, "allow_actions = [\"query\", \"update\"]\nallow_tables = [\"users\"]\n")
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "orders.csv")
+	if err := os.WriteFile(csvPath, []byte("id,total\n1,10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exportPath := filepath.Join(dir, "orders.csv.out")
+	planPath := filepath.Join(dir, "plan.json")
+	if err := os.WriteFile(planPath, []byte(`{"steps":[{"action":"query","sql":"select * from orders"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"import", "--config", configPath, "file", csvPath, "local-sqlite", "orders"},
+		{"export", "--config", configPath, "table", "orders", "local-sqlite", exportPath},
+		{"inspect", "table", "--config", configPath, "local-sqlite", "orders"},
+		{"tx", "--config", configPath, "local-sqlite", "--plan", planPath},
+	} {
+		out := captureStdout(t, func() error {
+			err := New().Run(context.Background(), args)
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return nil
+			}
+			return err
+		})
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatalf("unmarshal table policy output: %v", err)
+		}
+		if payload["code"] != "table_blocked" {
+			t.Fatalf("expected table_blocked for %#v, got %#v", args, payload)
+		}
+	}
+}
+
+func TestAllowTablesFiltersInspectSchema(t *testing.T) {
+	configPath := makeSQLiteRelationFixtureWithExtras(t, "allow_tables = [\"users\"]\n")
+	out := captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"inspect", "schema", "--config", configPath, "local-sqlite"})
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal inspect schema output: %v", err)
+	}
+	tables := payload["data"].(map[string]any)["tables"].([]any)
+	if len(tables) != 1 || tables[0].(map[string]any)["name"] != "users" {
+		t.Fatalf("expected only users table, got %#v", tables)
+	}
+}
+
 func TestTxRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 	configPath := makeSQLiteFixtureWithExtras(t, 2, "allow_actions = [\"query\", \"update\"]\n")
 	dir := t.TempDir()
@@ -725,6 +813,10 @@ tags = ["local"]
 }
 
 func makeSQLiteRelationFixture(t *testing.T) string {
+	return makeSQLiteRelationFixtureWithExtras(t, "")
+}
+
+func makeSQLiteRelationFixtureWithExtras(t *testing.T, extras string) string {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "relations.db")
@@ -762,7 +854,7 @@ engine = "sqlite"
 path = "` + dbPath + `"
 allow_actions = ["query"]
 tags = ["local"]
-`
+` + extras
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
