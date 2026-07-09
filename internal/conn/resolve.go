@@ -31,6 +31,7 @@ type Spec struct {
 	Timeout        time.Duration
 	Environment    string
 	SecretSources  map[string]string
+	Warnings       []string
 	DisplayTarget  string
 	ProductionLike bool
 }
@@ -92,6 +93,9 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 
 	if profile.Connection.DSN != "" {
 		spec.DSN = profile.Connection.DSN
+		if dsnHasPassword(spec.Engine, spec.DSN) {
+			spec.Warnings = append(spec.Warnings, "connection.dsn contains an inline password; use structured connection fields with password = \"dbx-aes-gcm:v1:...\"")
+		}
 		if spec.Engine == "" {
 			spec.Engine = inferEngine(profile.Connection.DSN)
 		}
@@ -103,16 +107,20 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		}
 		spec.DSN = value
 		spec.SecretSources["dsn"] = "env"
+		if dsnHasPassword(spec.Engine, value) {
+			spec.Warnings = append(spec.Warnings, "dsn_env resolved to a DSN with an inline password; use structured connection fields with password = \"dbx-aes-gcm:v1:...\"")
+		}
 		if spec.Engine == "" {
 			spec.Engine = inferEngine(value)
 		}
 	}
 
 	if spec.DSN == "" {
-		password, source, err := profile.Connection.Password.Resolve(ctx)
+		password, source, warnings, err := profile.Connection.Password.ResolveWithWarnings(ctx)
 		if err != nil {
 			return Spec{}, fmt.Errorf("connection %q password: %w", profile.Name, err)
 		}
+		spec.Warnings = append(spec.Warnings, warnings...)
 		if source != "" {
 			spec.SecretSources["password"] = source
 		}
@@ -240,6 +248,32 @@ func inferEngine(dsn string) string {
 	default:
 		return ""
 	}
+}
+
+func dsnHasPassword(engine, dsn string) bool {
+	switch normalizeEngine(engine) {
+	case "postgres":
+		if u, err := url.Parse(dsn); err == nil && u.User != nil {
+			_, ok := u.User.Password()
+			return ok
+		}
+	case "mysql":
+		if idx := strings.Index(dsn, "@"); idx > 0 {
+			return strings.Contains(dsn[:idx], ":")
+		}
+	default:
+		raw := strings.ToLower(dsn)
+		if strings.HasPrefix(raw, "postgres://") || strings.HasPrefix(raw, "postgresql://") {
+			if u, err := url.Parse(dsn); err == nil && u.User != nil {
+				_, ok := u.User.Password()
+				return ok
+			}
+		}
+		if idx := strings.Index(dsn, "@"); idx > 0 {
+			return strings.Contains(dsn[:idx], ":")
+		}
+	}
+	return false
 }
 
 func normalizeEngine(engine string) string {

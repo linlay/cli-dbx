@@ -268,7 +268,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	profiles, path, err := config.List(flags.configPath)
+	profiles, _, err := config.List(flags.configPath)
 	if err != nil {
 		return a.renderError(flags.format, flags.verbose, conn.Spec{}, "", "", err)
 	}
@@ -284,13 +284,12 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 			})
 		}
 		return output.PrintEnvelope(flags.format, output.Envelope{
-			OK:         true,
-			Kind:       "conn_list",
-			Connection: path,
-			Summary:    fmt.Sprintf("%d connection targets available; test one before query", len(names)),
-			Data:       map[string]any{"connections": names},
-			AuditID:    audit.ID("conn-list"),
-			Verbose:    flags.verbose,
+			OK:      true,
+			Kind:    "conn_list",
+			Summary: fmt.Sprintf("%d connection targets available; test one before query", len(names)),
+			Data:    map[string]any{"connections": names},
+			AuditID: audit.ID("conn-list"),
+			Verbose: flags.verbose,
 		})
 	case "show", "resolve", "test":
 		rest := fs.Args()
@@ -307,7 +306,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 			if err != nil {
 				return a.renderError(flags.format, flags.verbose, spec, "", "", err)
 			}
-			return output.PrintEnvelope(flags.format, output.Envelope{
+			return printEnvelopeWithWarnings(flags.format, spec, output.Envelope{
 				OK:         true,
 				Kind:       "conn_test",
 				Connection: spec.Name,
@@ -319,7 +318,7 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 				Verbose:    flags.verbose,
 			})
 		}
-		return output.PrintEnvelope(flags.format, output.Envelope{
+		return printEnvelopeWithWarnings(flags.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "conn_show",
 			Connection: spec.Name,
@@ -377,7 +376,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	}
 	auditID := audit.ID(string(actualAction) + ":" + spec.Name)
 	if common.dryRun {
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:             true,
 			Kind:           "sql_plan",
 			Engine:         spec.Engine,
@@ -408,7 +407,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 		more := result.Truncated
 		next := nextForClass(analysis.StatementClass, more)
 		nextCursorValue := nextCursor(cursorOffset, common.pageSize, result)
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:             true,
 			Kind:           "query_result",
 			Engine:         spec.Engine,
@@ -432,7 +431,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, reportedAction, analysis.StatementClass, err)
 	}
-	return output.PrintEnvelope(common.format, output.Envelope{
+	return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 		OK:             true,
 		Kind:           "write_result",
 		Engine:         spec.Engine,
@@ -488,7 +487,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, "", "", err)
 		}
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_schema",
 			Engine:     spec.Engine,
@@ -509,7 +508,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if err != nil {
 			return a.renderError(common.format, common.verbose, spec, "", "", err)
 		}
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_table",
 			Engine:     spec.Engine,
@@ -529,7 +528,7 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 			Verbose: common.verbose,
 		})
 	case "connection":
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "inspect_connection",
 			Engine:     spec.Engine,
@@ -589,7 +588,7 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if err := db.ExportRows(result.Rows, result.Columns, *fileFormat, file); err != nil {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
-	return output.PrintEnvelope("json", output.Envelope{
+	return printEnvelopeWithWarnings("json", spec, output.Envelope{
 		OK:         true,
 		Kind:       "export_result",
 		Engine:     spec.Engine,
@@ -637,7 +636,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
 	if common.dryRun {
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "import_plan",
 			Engine:     spec.Engine,
@@ -658,7 +657,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
-	return output.PrintEnvelope(common.format, output.Envelope{
+	return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 		OK:         true,
 		Kind:       "import_result",
 		Engine:     spec.Engine,
@@ -718,7 +717,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 		}
 	}
 	if common.dryRun {
-		return output.PrintEnvelope(common.format, output.Envelope{
+		return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 			OK:         true,
 			Kind:       "tx_plan",
 			Engine:     spec.Engine,
@@ -737,7 +736,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, "", "", err)
 	}
-	return output.PrintEnvelope(common.format, output.Envelope{
+	return printEnvelopeWithWarnings(common.format, spec, output.Envelope{
 		OK:         true,
 		Kind:       "tx_result",
 		Engine:     spec.Engine,
@@ -905,9 +904,14 @@ func redactDSN(spec conn.Spec) string {
 		return spec.DSN
 	}
 	if idx := strings.Index(spec.DSN, "@"); idx >= 0 {
-		start := strings.Index(spec.DSN, "://")
-		if start >= 0 {
+		// PostgreSQL URL format: scheme://user:password@host/...
+		if start := strings.Index(spec.DSN, "://"); start >= 0 {
 			return spec.DSN[:start+3] + "***:***" + spec.DSN[idx:]
+		}
+		// MySQL DSN format: user:password@protocol(host)/...
+		prefix := spec.DSN[:idx]
+		if colon := strings.LastIndex(prefix, ":"); colon >= 0 {
+			return spec.DSN[:colon+1] + "***" + spec.DSN[idx:]
 		}
 	}
 	return spec.DSN
@@ -1074,8 +1078,16 @@ func (a *App) renderError(format string, verbose bool, spec conn.Spec, act actio
 	if err != nil {
 		env.Warnings = []string{err.Error()}
 	}
+	env.Warnings = append(env.Warnings, spec.Warnings...)
 	if printErr := output.PrintEnvelope(format, env); printErr != nil {
 		return printErr
 	}
 	return &ExitError{Code: 1}
+}
+
+func printEnvelopeWithWarnings(format string, spec conn.Spec, env output.Envelope) error {
+	if len(spec.Warnings) > 0 {
+		env.Warnings = append(env.Warnings, spec.Warnings...)
+	}
+	return output.PrintEnvelope(format, env)
 }

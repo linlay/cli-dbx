@@ -44,7 +44,7 @@ func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func ExecuteContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	root := newRootCommand(stdin, stdout, stderr)
-	root.SetContext(ctx)
+	root.SetContext(withSecretProvider(ctx, stdin, stderr))
 	root.SetArgs(args)
 
 	if err := root.Execute(); err != nil {
@@ -141,6 +141,7 @@ dbx admin file local-pg ./admin.sql
 		newTxCommand(),
 		newImportCommand(),
 		newExportCommand(),
+		newSecretCommand(),
 		newVersionCommand(),
 	)
 

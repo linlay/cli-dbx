@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## 1. 项目概览
 
@@ -79,7 +79,7 @@
   操作手册、快速开始、简单验证
 - `docs/beginner-guide.md`
   新手第一次上手
-- `CLAUDE.md`
+- `AGENTS.md`
   设计、重要功能、开发约定、维护流程
 
 ## 5. 数据结构
@@ -174,7 +174,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 ## 7. 开发要点
 
 - 新增数据库能力时，先明确它属于哪个 action，再补 CLI 和帮助文案。
-- 不要把设计解释重新堆进 `README.md`；设计说明统一维护在 `CLAUDE.md`。
+- 不要把设计解释重新堆进 `README.md`；设计说明统一维护在 `AGENTS.md`。
 - `README.md` 只保留操作说明、配置示例、简单测试和排查。
 - `docs/beginner-guide.md` 只讲新手视角，不承载架构事实。
 - `allow_actions` 是 DBX 层最重要的能力边界之一，任何变更都必须补测试。
@@ -213,7 +213,7 @@ go test ./...
 
 如果文档分工变化：
 
-- 设计和约定改 `CLAUDE.md`
+- 设计和约定改 `AGENTS.md`
 - 用户操作和快速验证改 `README.md`
 - 新手入门体验改 `docs/beginner-guide.md`
 

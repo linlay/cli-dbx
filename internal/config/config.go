@@ -1,12 +1,10 @@
 package config
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/linlay/cli-dbx/internal/action"
+	"github.com/linlay/cli-dbx/internal/secret"
 )
 
 const defaultConfigDir = ".config/dbx"
@@ -205,44 +204,31 @@ func (c ConnectionConfig) EffectiveTimeout() time.Duration {
 }
 
 func (v ValueSource) Resolve(ctx context.Context) (string, string, error) {
+	value, source, _, err := v.ResolveWithWarnings(ctx)
+	return value, source, err
+}
+
+func (v ValueSource) ResolveWithWarnings(ctx context.Context) (string, string, []string, error) {
 	if v.Value != "" {
-		return v.Value, "value", nil
+		if secret.IsEncryptedValue(v.Value) {
+			value, err := secret.DecryptString(ctx, v.Value)
+			if err != nil {
+				return "", "encrypted", nil, err
+			}
+			return value, "encrypted", nil, nil
+		}
+		return v.Value, "plaintext", []string{"plaintext password is not recommended; use dbx secret encrypt and store password = \"dbx-aes-gcm:v1:...\""}, nil
 	}
 	if v.Env != "" {
-		s, ok := os.LookupEnv(v.Env)
-		if !ok {
-			return "", "env", fmt.Errorf("environment variable %s is not set", v.Env)
-		}
-		return s, "env", nil
+		return "", "env", nil, fmt.Errorf("password.env is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
 	}
 	if v.File != "" {
-		path, err := expandHome(v.File)
-		if err != nil {
-			return "", "file", err
-		}
-		buf, err := os.ReadFile(path)
-		if err != nil {
-			return "", "file", err
-		}
-		return strings.TrimRight(string(buf), "\r\n"), "file", nil
+		return "", "file", nil, fmt.Errorf("password.file is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
 	}
 	if len(v.Cmd) > 0 {
-		if strings.Contains(v.Cmd[0], " ") {
-			return "", "cmd", fmt.Errorf("cmd source must be an argv array, not a shell string")
-		}
-		cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(cmdCtx, v.Cmd[0], v.Cmd[1:]...)
-		var stdout bytes.Buffer
-		var stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return "", "cmd", fmt.Errorf("command %q failed: %w: %s", v.Cmd[0], err, strings.TrimSpace(stderr.String()))
-		}
-		return strings.TrimRight(stdout.String(), "\r\n"), "cmd", nil
+		return "", "cmd", nil, fmt.Errorf("password.cmd is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
 	}
-	return "", "", nil
+	return "", "", nil, nil
 }
 
 const (

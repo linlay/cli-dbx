@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/linlay/cli-dbx/internal/buildinfo"
+	"github.com/linlay/cli-dbx/internal/secret"
 	_ "modernc.org/sqlite"
 )
 
@@ -171,6 +172,29 @@ func TestVersionCommandAndFlag(t *testing.T) {
 	}
 	if strings.TrimSpace(flagResult.stdout) != "dbx v0.1.0 (commit abc1234, built 2026-03-25T12:00:00Z)" {
 		t.Fatalf("unexpected --version stdout: %q", flagResult.stdout)
+	}
+}
+
+func TestSecretEncryptOutputsTomlPasswordLine(t *testing.T) {
+	stdin := bytes.NewBufferString("master-passphrase\ndb-secret\n")
+	result := runCommand(t, stdin, "secret", "encrypt")
+	if result.code != ExitSuccess {
+		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitSuccess, result.code, result.stdout, result.stderr)
+	}
+	if !strings.Contains(result.stderr, "master passphrase:") || !strings.Contains(result.stderr, "database password:") {
+		t.Fatalf("expected secret prompts on stderr, got %q", result.stderr)
+	}
+	raw := strings.TrimSpace(result.stdout)
+	if !strings.HasPrefix(raw, `password = "dbx-aes-gcm:v1:`) || !strings.HasSuffix(raw, `"`) {
+		t.Fatalf("unexpected secret encrypt output: %q", result.stdout)
+	}
+	value := strings.TrimSuffix(strings.TrimPrefix(raw, `password = "`), `"`)
+	plain, err := secret.DecryptStringWithPassphrase("master-passphrase", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain != "db-secret" {
+		t.Fatalf("decrypted password = %q", plain)
 	}
 }
 

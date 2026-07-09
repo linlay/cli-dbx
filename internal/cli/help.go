@@ -19,6 +19,7 @@ Use:
   tx        run a structured transaction plan
   import    load csv/json into a table
   export    write a table to a file
+  secret    encrypt passwords for config files
   version   show build version
 
 Flow:
@@ -30,6 +31,7 @@ Flow:
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100
   dbx update local-pg 'update users set active = 1 where id = 1'
+  dbx secret encrypt
   dbx version
 `
 }
@@ -249,6 +251,23 @@ Examples:
 `
 }
 
+func secretHelp() string {
+	return `dbx secret
+
+When to use:
+  Encrypt a database password before putting it in ~/.config/dbx/<name>.toml.
+
+Commands:
+  encrypt
+
+Examples:
+  dbx secret encrypt
+
+Next:
+  Store the output as password = "dbx-aes-gcm:v1:..." in the connection file.
+`
+}
+
 func printHelp(topic string) error {
 	switch topic {
 	case "", "root":
@@ -273,6 +292,8 @@ func printHelp(topic string) error {
 		fmt.Print(importHelp())
 	case "export":
 		fmt.Print(exportHelp())
+	case "secret":
+		fmt.Print(secretHelp())
 	case "version":
 		fmt.Print(versionHelp())
 	default:

@@ -8,7 +8,7 @@
 - 用显式命令执行查询、更新、DDL 和导入导出
 - 用适合脚本和终端的格式返回结果
 
-如果你要看设计目标、动作边界、事务模型和开发约定，请看 [CLAUDE.md](./CLAUDE.md)。
+如果你要看设计目标、动作边界、事务模型和开发约定，请看 [AGENTS.md](./AGENTS.md)。
 
 ## 2. 快速开始
 
@@ -102,7 +102,12 @@ tags = ["local"]
 ```toml
 [connection]
 engine = "postgres"
-dsn_env = "LOCAL_PG_DSN"
+host = "127.0.0.1"
+port = 5432
+user = "app"
+database = "appdb"
+password = "dbx-aes-gcm:v1:..."
+sslmode = "disable"
 allow_actions = ["query"]
 tags = ["dev", "local"]
 ```
@@ -116,23 +121,24 @@ host = "127.0.0.1"
 port = 3306
 user = "app"
 database = "appdb"
-password.env = "MYSQL_PASSWORD"
+password = "dbx-aes-gcm:v1:..."
 allow_actions = ["query"]
 ```
 
-密码来源支持：
+生成加密密码：
 
-- `password.env`
-- `password.file`
-- `password.cmd`
-- 明文值
+```bash
+./dbx secret encrypt
+```
+
+密码可以继续写成 `password = "明文"`，但 DBX 会输出 warning；`password.env`、`password.cmd`、`password.file` 默认禁用。`dsn_env` 仍可用，但如果 DSN 里带密码，也会提示改用结构化连接字段加加密密码。
 
 操作层面可以先这样理解：
 
 - `allow_actions` 控制这个连接允许哪些命令动作
 - 推荐显式写出最小权限集合，不依赖隐式默认值
 
-如果你要理解 `allow_actions` 和为什么 `tx` 只允许 `query/update`，请看 [CLAUDE.md](./CLAUDE.md)。
+如果你要理解 `allow_actions` 和为什么 `tx` 只允许 `query/update`，请看 [AGENTS.md](./AGENTS.md)。
 
 也可以直接参考：
 
@@ -156,7 +162,7 @@ tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
 ./dbx conn --help
 ```
 
-维护者的构建、打包、发布流程见 [CLAUDE.md](./CLAUDE.md)。
+维护者的构建、打包、发布流程见 [AGENTS.md](./AGENTS.md)。
 
 ## 5. 简单验证与排查
 
@@ -194,12 +200,13 @@ go test ./...
 
 - 连接不存在：确认配置文件名和连接名一致
 - 动作不允许：检查 `allow_actions`
-- 密码没读到：检查 `password.env`、`password.file`、`password.cmd`
+- 加密密码解不开：确认输入的是加密时使用的 master passphrase
+- 密码来源被禁用：改用 `password = "dbx-aes-gcm:v1:..."`
 - SQLite 路径不对：相对路径是相对于配置文件目录，不是当前工作目录
 
 ## 6. 进一步阅读
 
-- [CLAUDE.md](./CLAUDE.md)
+- [AGENTS.md](./AGENTS.md)
   设计与开发约定
 - [Beginner Guide](./docs/beginner-guide.md)
   第一次上手

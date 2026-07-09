@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/linlay/cli-dbx/internal/secret"
 )
 
 func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
@@ -16,16 +18,12 @@ func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(configDir, "data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	secretPath := filepath.Join(configDir, "secret.txt")
-	if err := os.WriteFile(secretPath, []byte("file-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	raw := `
 [connection]
 engine = "sqlite"
 path = "./data/test.db"
 allow_actions = ["query"]
-password.file = "./secret.txt"
+password = "plain-secret"
 `
 	if err := os.WriteFile(filepath.Join(configDir, "local-sqlite.toml"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -41,12 +39,51 @@ password.file = "./secret.txt"
 	if profile.Connection.Path != filepath.Join(configDir, "data", "test.db") {
 		t.Fatalf("sqlite path = %q", profile.Connection.Path)
 	}
-	secret, source, err := profile.Connection.Password.Resolve(context.Background())
+	value, source, warnings, err := profile.Connection.Password.ResolveWithWarnings(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "file" || secret != "file-secret" {
-		t.Fatalf("unexpected secret resolution: %q / %q", source, secret)
+	if source != "plaintext" || value != "plain-secret" || len(warnings) != 1 {
+		t.Fatalf("unexpected secret resolution: value=%q source=%q warnings=%v", value, source, warnings)
+	}
+}
+
+func TestValueSourceResolvesEncryptedPassword(t *testing.T) {
+	encrypted, err := secret.EncryptString("master-passphrase", "db-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := secret.WithPassphraseProvider(context.Background(), func(context.Context) (string, error) {
+		return "master-passphrase", nil
+	})
+
+	value, source, warnings, err := (ValueSource{Value: encrypted}).ResolveWithWarnings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "db-secret" || source != "encrypted" || len(warnings) != 0 {
+		t.Fatalf("unexpected encrypted resolution: value=%q source=%q warnings=%v", value, source, warnings)
+	}
+}
+
+func TestValueSourceDisablesAgentReadableSources(t *testing.T) {
+	testCases := []struct {
+		name string
+		src  ValueSource
+		want string
+	}{
+		{name: "env", src: ValueSource{Env: "DB_PASSWORD"}, want: "password.env is disabled"},
+		{name: "cmd", src: ValueSource{Cmd: []string{"pass", "show", "db"}}, want: "password.cmd is disabled"},
+		{name: "file", src: ValueSource{File: "./secret.txt"}, want: "password.file is disabled"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := tc.src.ResolveWithWarnings(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
 	}
 }
 

@@ -53,6 +53,9 @@ func PrintEnvelope(format string, env Envelope) error {
 		if env.Summary != "" {
 			fmt.Printf("summary: %s\n", env.Summary)
 		}
+		for _, warning := range env.Warnings {
+			fmt.Printf("warning: %s\n", warning)
+		}
 		if env.Data != nil {
 			if rows, ok := env.Data.([]map[string]any); ok {
 				printRows(rows)
@@ -71,9 +74,11 @@ func compactPayload(env Envelope) map[string]any {
 	payload := map[string]any{
 		"ok":      env.OK,
 		"kind":    env.Kind,
-		"conn":    env.Connection,
 		"summary": env.Summary,
 		"more":    env.More,
+	}
+	if env.Connection != "" {
+		payload["conn"] = env.Connection
 	}
 	if env.StatementClass != "" {
 		payload["class"] = env.StatementClass

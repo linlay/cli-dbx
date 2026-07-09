@@ -6,7 +6,7 @@
 
 `dbx` 不是传统数据库 GUI，它更像是一个“有安全边界的数据库执行器”。
 
-如果你想看这套边界为什么这样设计、`allow_actions` 和 `tx` 的约束是什么，可以继续看仓库根目录的 [CLAUDE.md](../CLAUDE.md)。
+如果你想看这套边界为什么这样设计、`allow_actions` 和 `tx` 的约束是什么，可以继续看仓库根目录的 [AGENTS.md](../AGENTS.md)。
 
 你可以把它想象成：
 
@@ -142,13 +142,18 @@ id,name
 ```toml
 [connection]
 engine = "postgres"
-dsn_env = "LOCAL_PG_DSN"
+host = "127.0.0.1"
+port = 5432
+user = "app"
+database = "appdb"
+password = "dbx-aes-gcm:v1:..."
+sslmode = "disable"
 allow_actions = ["query"]
 tags = ["dev"]
 ```
 
 ```bash
-export LOCAL_PG_DSN='postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable'
+./dbx secret encrypt
 ./dbx conn test local-pg
 ```
 
@@ -161,12 +166,12 @@ host = "127.0.0.1"
 port = 3306
 user = "app"
 database = "appdb"
-password.env = "MYSQL_PASSWORD"
+password = "dbx-aes-gcm:v1:..."
 allow_actions = ["query"]
 ```
 
 ```bash
-export MYSQL_PASSWORD='secret'
+./dbx secret encrypt
 ./dbx conn test local-mysql
 ```
 
@@ -187,9 +192,9 @@ export MYSQL_PASSWORD='secret'
 
 检查：
 
-- `password.env` 对应的环境变量是否真的存在
-- `password.cmd` 是否写成数组
-- 文件路径是否可读
+- `password` 是否是 `dbx-aes-gcm:v1:...` 格式
+- 输入的 master passphrase 是否和加密时一致
+- 如果还在用明文 `password = "..."`，DBX 会允许但会提示不推荐
 
 ### SQLite 查不到库
 
