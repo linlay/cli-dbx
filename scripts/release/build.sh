@@ -53,11 +53,22 @@ targets=(
   "darwin arm64"
   "linux amd64"
   "linux arm64"
+  "windows amd64"
+  "windows arm64"
 )
+
+archives=()
 
 for target in "${targets[@]}"; do
   read -r goos goarch <<<"$target"
-  archive_name="dbx_${version}_${goos}_${goarch}.tar.gz"
+  binary_name="dbx"
+  archive_ext="tar.gz"
+  if [[ "$goos" == "windows" ]]; then
+    binary_name="dbx.exe"
+    archive_ext="zip"
+  fi
+  archive_name="dbx_${version}_${goos}_${goarch}.${archive_ext}"
+  archives+=("$archive_name")
   package_dir="$stage_dir/dbx_${version}_${goos}_${goarch}"
 
   rm -rf "$package_dir"
@@ -71,7 +82,7 @@ for target in "${targets[@]}"; do
     go build \
       -trimpath \
       -ldflags "-s -w -X github.com/linlay/cli-dbx/internal/buildinfo.Version=$version -X github.com/linlay/cli-dbx/internal/buildinfo.Commit=$commit -X github.com/linlay/cli-dbx/internal/buildinfo.BuildTime=$build_time" \
-      -o "$package_dir/dbx" \
+      -o "$package_dir/$binary_name" \
       ./cmd/dbx
 
   cp "$repo_root/README.md" "$package_dir/README.md"
@@ -79,25 +90,27 @@ for target in "${targets[@]}"; do
     cp "$repo_root/LICENSE" "$package_dir/LICENSE"
   fi
 
-  tar -C "$package_dir" -czf "$dist_dir/$archive_name" .
+  if [[ "$archive_ext" == "zip" ]]; then
+    command -v zip >/dev/null 2>&1 || {
+      echo "zip is required to package Windows releases" >&2
+      exit 1
+    }
+    rm -f "$dist_dir/$archive_name"
+    (
+      cd "$package_dir"
+      zip -qr "$dist_dir/$archive_name" .
+    )
+  else
+    tar -C "$package_dir" -czf "$dist_dir/$archive_name" .
+  fi
 done
 
 (
   cd "$dist_dir"
   if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 \
-      "dbx_${version}_darwin_amd64.tar.gz" \
-      "dbx_${version}_darwin_arm64.tar.gz" \
-      "dbx_${version}_linux_amd64.tar.gz" \
-      "dbx_${version}_linux_arm64.tar.gz" \
-      > "dbx_${version}_checksums.txt"
+    shasum -a 256 "${archives[@]}" > "dbx_${version}_checksums.txt"
   else
-    sha256sum \
-      "dbx_${version}_darwin_amd64.tar.gz" \
-      "dbx_${version}_darwin_arm64.tar.gz" \
-      "dbx_${version}_linux_amd64.tar.gz" \
-      "dbx_${version}_linux_arm64.tar.gz" \
-      > "dbx_${version}_checksums.txt"
+    sha256sum "${archives[@]}" > "dbx_${version}_checksums.txt"
   fi
 )
 

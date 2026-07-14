@@ -97,6 +97,12 @@ tags = ["local"]
 
 每个连接一个文件，例如 `~/.config/dbx/local-pg.toml`。
 
+### Agent Platform 专属配置
+
+当 Agent Platform 启动 dbx 时，会把当前 agent 的 `.config` 设为 `XDG_CONFIG_HOME`，并保留系统 XDG 根供回退。dbx 会优先读取 `$XDG_CONFIG_HOME/dbx/<connection>.toml`；agent 未定义该连接时，再读取系统 XDG 目录或 `~/.config/dbx`。`conn list` 合并两侧连接，重名连接以 agent 配置为准。
+
+显式传入 `--config <path>` 时只读取该路径，不使用 agent 或系统回退。agent 中已经存在但无法解析的同名连接会直接报错，避免意外访问系统连接。连接文件可能包含数据库访问资料，应放在私有运行时目录且不得提交。
+
 最小 PostgreSQL 例子：
 
 ```toml
@@ -153,6 +159,8 @@ allow_actions = ["query"]
 - macOS Intel：`dbx_vX.Y.Z_darwin_amd64.tar.gz`
 - Linux ARM64：`dbx_vX.Y.Z_linux_arm64.tar.gz`
 - Linux AMD64：`dbx_vX.Y.Z_linux_amd64.tar.gz`
+- Windows ARM64：`dbx_vX.Y.Z_windows_arm64.zip`
+- Windows AMD64：`dbx_vX.Y.Z_windows_amd64.zip`
 
 解压后可直接验证：
 
@@ -161,6 +169,8 @@ tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
 ./dbx version
 ./dbx conn --help
 ```
+
+Windows 使用 `Expand-Archive` 或其他 zip 工具解压后运行 `dbx.exe version`。
 
 维护者的构建、打包、发布流程见 [AGENTS.md](./AGENTS.md)。
 

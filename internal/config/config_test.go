@@ -48,6 +48,107 @@ password = "plain-secret"
 	}
 }
 
+func TestDefaultConfigUsesAgentConnectionThenSystemFallback(t *testing.T) {
+	home := t.TempDir()
+	agentHome := filepath.Join(t.TempDir(), ".config")
+	systemHome := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("HOME", home)
+	t.Setenv(agentConfigHomeEnv, agentHome)
+	t.Setenv(systemConfigHomeEnv, systemHome)
+
+	writeProfile := func(dir, name, database string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, "dbx"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		raw := "[connection]\nengine = \"sqlite\"\npath = \"./" + database + ".db\"\nallow_actions = [\"query\"]\n"
+		if err := os.WriteFile(filepath.Join(dir, "dbx", name+".toml"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProfile(systemHome, "system-only", "system")
+	writeProfile(systemHome, "shared", "system-shared")
+	writeProfile(agentHome, "shared", "agent-shared")
+
+	profile, err := LoadNamed("", "system-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := profile.Path, filepath.Join(systemHome, "dbx", "system-only.toml"); got != want {
+		t.Fatalf("system fallback path = %q, want %q", got, want)
+	}
+	profile, err = LoadNamed("", "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := profile.Path, filepath.Join(agentHome, "dbx", "shared.toml"); got != want {
+		t.Fatalf("agent override path = %q, want %q", got, want)
+	}
+
+	profiles, _, err := List("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 2 || profiles[0].Name != "shared" || profiles[1].Name != "system-only" {
+		t.Fatalf("unexpected overlay list: %#v", profiles)
+	}
+}
+
+func TestDefaultAgentConfigHonorsXDGConfigHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	agentHome := t.TempDir()
+	customConfigHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(agentConfigHomeEnv, agentHome)
+	t.Setenv("XDG_CONFIG_HOME", customConfigHome)
+
+	paths, err := defaultConfigPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := paths[0], filepath.Join(customConfigHome, "dbx"); got != want {
+		t.Fatalf("primary config path = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigDoesNotFallbackWhenAgentConnectionIsInvalid(t *testing.T) {
+	home := t.TempDir()
+	agentHome := filepath.Join(t.TempDir(), ".config")
+	systemHome := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("HOME", home)
+	t.Setenv(agentConfigHomeEnv, agentHome)
+	t.Setenv(systemConfigHomeEnv, systemHome)
+	for _, dir := range []string{agentHome, systemHome} {
+		if err := os.MkdirAll(filepath.Join(dir, "dbx"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(agentHome, "dbx", "shared.toml"), []byte("[connection\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(systemHome, "dbx", "shared.toml"), []byte("[connection]\nengine = \"sqlite\"\npath = \":memory:\"\nallow_actions = [\"query\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadNamed("", "shared"); err == nil || !strings.Contains(err.Error(), "shared.toml") {
+		t.Fatalf("expected agent config parse error, got %v", err)
+	}
+}
+
+func TestExplicitConfigDoesNotUseAgentFallback(t *testing.T) {
+	agentHome := filepath.Join(t.TempDir(), ".config")
+	explicitDir := t.TempDir()
+	t.Setenv(agentConfigHomeEnv, agentHome)
+	if err := os.MkdirAll(filepath.Join(agentHome, "dbx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentHome, "dbx", "reader.toml"), []byte("[connection]\nengine = \"sqlite\"\npath = \":memory:\"\nallow_actions = [\"query\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadNamed(explicitDir, "reader"); err == nil || !strings.Contains(err.Error(), explicitDir) {
+		t.Fatalf("expected explicit config not-found error, got %v", err)
+	}
+}
+
 func TestValueSourceResolvesEncryptedPassword(t *testing.T) {
 	encrypted, err := secret.EncryptString("master-passphrase", "db-secret")
 	if err != nil {

@@ -15,7 +15,11 @@ import (
 	"github.com/linlay/cli-dbx/internal/secret"
 )
 
-const defaultConfigDir = ".config/dbx"
+const (
+	defaultConfigDir    = ".config/dbx"
+	agentConfigHomeEnv  = "AP_AGENT_CONFIG_HOME"
+	systemConfigHomeEnv = "AP_SYSTEM_XDG_CONFIG_HOME"
+)
 
 type Profile struct {
 	Name       string
@@ -98,27 +102,142 @@ func (v *ValueSource) UnmarshalTOML(input any) error {
 }
 
 func List(path string) ([]Profile, string, error) {
-	resolvedPath, err := resolvePath(path)
+	resolvedPaths, displayPath, err := resolvePaths(path)
 	if err != nil {
 		return nil, "", err
 	}
-	kind, exists, err := detectPathKind(resolvedPath)
-	if err != nil {
-		return nil, "", err
+	if path != "" {
+		profiles, err := listProfiles(resolvedPaths[0])
+		return profiles, displayPath, err
 	}
-	if kind == pathKindFile {
-		profile, err := loadFile(resolvedPath)
+	// Load the system directories first so a same-named agent connection wins.
+	byName := map[string]Profile{}
+	for index := len(resolvedPaths) - 1; index >= 0; index-- {
+		profiles, err := listProfiles(resolvedPaths[index])
+		if err != nil {
+			return nil, displayPath, err
+		}
+		for _, profile := range profiles {
+			byName[profile.Name] = profile
+		}
+	}
+	profiles := make([]Profile, 0, len(byName))
+	for _, profile := range byName {
+		profiles = append(profiles, profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
+	return profiles, displayPath, nil
+}
+
+func LoadNamed(path, name string) (Profile, error) {
+	if strings.TrimSpace(name) == "" {
+		return Profile{}, fmt.Errorf("no connection selected")
+	}
+	resolvedPaths, _, err := resolvePaths(path)
+	if err != nil {
+		return Profile{}, err
+	}
+	for _, resolvedPath := range resolvedPaths {
+		kind, exists, err := detectPathKind(resolvedPath)
+		if err != nil {
+			return Profile{}, err
+		}
+		if kind == pathKindFile {
+			if !exists {
+				continue
+			}
+			profile, err := loadFile(resolvedPath)
+			if err != nil {
+				return Profile{}, err
+			}
+			if profile.Name != name {
+				return Profile{}, fmt.Errorf("connection %q does not match config file %q; expected %q", name, resolvedPath, profile.Name)
+			}
+			return profile, nil
+		}
+		configFile := filepath.Join(resolvedPath, name+".toml")
+		if _, err := os.Stat(configFile); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return Profile{}, err
+		}
+		// A present primary config is authoritative: parsing errors must not
+		// silently fall through to a system connection with the same name.
+		return loadFile(configFile)
+	}
+	return Profile{}, fmt.Errorf("connection %q not found; expected %s", name, filepath.Join(resolvedPaths[0], name+".toml"))
+}
+
+func resolvePaths(path string) ([]string, string, error) {
+	if path != "" {
+		resolvedPath, err := expandHome(path)
 		if err != nil {
 			return nil, "", err
 		}
-		return []Profile{profile}, resolvedPath, nil
+		return []string{resolvedPath}, resolvedPath, nil
+	}
+	paths, err := defaultConfigPaths()
+	if err != nil {
+		return nil, "", err
+	}
+	return paths, paths[0], nil
+}
+
+func defaultConfigPaths() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	if agentConfigHome := strings.TrimSpace(os.Getenv(agentConfigHomeEnv)); agentConfigHome != "" {
+		primaryConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+		if primaryConfigHome == "" {
+			primaryConfigHome = agentConfigHome
+		}
+		paths := []string{filepath.Join(primaryConfigHome, "dbx")}
+		if systemConfigHome := strings.TrimSpace(os.Getenv(systemConfigHomeEnv)); systemConfigHome != "" {
+			paths = appendUniquePath(paths, filepath.Join(systemConfigHome, "dbx"))
+		}
+		return appendUniquePath(paths, filepath.Join(home, defaultConfigDir)), nil
+	}
+	if configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configHome != "" {
+		return []string{filepath.Join(configHome, "dbx")}, nil
+	}
+	return []string{filepath.Join(home, defaultConfigDir)}, nil
+}
+
+func appendUniquePath(paths []string, path string) []string {
+	for _, existing := range paths {
+		if filepath.Clean(existing) == filepath.Clean(path) {
+			return paths
+		}
+	}
+	return append(paths, path)
+}
+
+func listProfiles(resolvedPath string) ([]Profile, error) {
+	kind, exists, err := detectPathKind(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	if kind == pathKindFile {
+		if !exists {
+			return []Profile{}, nil
+		}
+		profile, err := loadFile(resolvedPath)
+		if err != nil {
+			return nil, err
+		}
+		return []Profile{profile}, nil
 	}
 	if !exists {
-		return []Profile{}, resolvedPath, nil
+		return []Profile{}, nil
 	}
 	entries, err := os.ReadDir(resolvedPath)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	profiles := make([]Profile, 0, len(entries))
 	for _, entry := range entries {
@@ -127,58 +246,11 @@ func List(path string) ([]Profile, string, error) {
 		}
 		profile, err := loadFile(filepath.Join(resolvedPath, entry.Name()))
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		profiles = append(profiles, profile)
 	}
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Name < profiles[j].Name
-	})
-	return profiles, resolvedPath, nil
-}
-
-func LoadNamed(path, name string) (Profile, error) {
-	if strings.TrimSpace(name) == "" {
-		return Profile{}, fmt.Errorf("no connection selected")
-	}
-	resolvedPath, err := resolvePath(path)
-	if err != nil {
-		return Profile{}, err
-	}
-	kind, _, err := detectPathKind(resolvedPath)
-	if err != nil {
-		return Profile{}, err
-	}
-	if kind == pathKindFile {
-		profile, err := loadFile(resolvedPath)
-		if err != nil {
-			return Profile{}, err
-		}
-		if profile.Name != name {
-			return Profile{}, fmt.Errorf("connection %q does not match config file %q; expected %q", name, resolvedPath, profile.Name)
-		}
-		return profile, nil
-	}
-	configFile := filepath.Join(resolvedPath, name+".toml")
-	profile, err := loadFile(configFile)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Profile{}, fmt.Errorf("connection %q not found; expected %s", name, configFile)
-		}
-		return Profile{}, err
-	}
-	return profile, nil
-}
-
-func resolvePath(path string) (string, error) {
-	if path != "" {
-		return expandHome(path)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, defaultConfigDir), nil
+	return profiles, nil
 }
 
 func expandHome(path string) (string, error) {
