@@ -335,7 +335,7 @@ dbx export table users local-pg ./users.json --format json
 }
 
 func addCommonFlags(cmd *cobra.Command, flags *commonFlags) {
-	cmd.Flags().StringVar(&flags.configPath, "config", "", "Config path")
+	cmd.Flags().StringVar(&flags.configPath, "config", "", "Config file or directory; disables default lookup")
 	cmd.Flags().StringVar(&flags.format, "format", "json", "Output format: json|table")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "Validate without executing")
 	cmd.Flags().IntVar(&flags.pageSize, "page-size", 100, "Maximum rows to materialize for read results")
@@ -345,13 +345,13 @@ func addCommonFlags(cmd *cobra.Command, flags *commonFlags) {
 }
 
 func addConnFlags(cmd *cobra.Command, flags *connFlags) {
-	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "Config path")
+	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "Config file or directory; disables default lookup")
 	cmd.PersistentFlags().StringVar(&flags.format, "format", "json", "Output format: json|table")
 	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "Include extra metadata in output")
 }
 
 func addExportFlags(cmd *cobra.Command, flags *exportFlags) {
-	cmd.Flags().StringVar(&flags.configPath, "config", "", "Config path")
+	cmd.Flags().StringVar(&flags.configPath, "config", "", "Config file or directory; disables default lookup")
 	cmd.Flags().StringVar(&flags.format, "format", "csv", "Export file format: csv|json")
 	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "Include extra metadata in output")
 	cmd.Flags().IntVar(&flags.limit, "limit", 0, "Optional row limit for export")

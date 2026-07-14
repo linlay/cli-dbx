@@ -204,10 +204,10 @@ go test ./...
 
 发布流程当前由维护者手工执行：
 
-1. 确认代码和文档已提交
+1. 将根目录 Git 跟踪的 `VERSION` 更新为计划发布的版本（格式如 `v0.1.0`），并与代码和文档一并提交
 2. 运行 `go test ./...`
-3. 创建并推送 tag，例如 `v0.1.0`
-4. 执行 `scripts/release/build.sh v0.1.0`
+3. 创建并推送与 `VERSION` 相同的 tag，例如 `v0.1.0`
+4. 执行 `scripts/release/build.sh`
 5. 校验 `dist/<version>/..._checksums.txt`
 6. 在 GitHub Release 上传产物
 

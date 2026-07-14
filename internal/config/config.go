@@ -16,9 +16,8 @@ import (
 )
 
 const (
-	defaultConfigDir    = ".config/dbx"
-	agentConfigHomeEnv  = "AP_AGENT_CONFIG_HOME"
-	systemConfigHomeEnv = "AP_SYSTEM_XDG_CONFIG_HOME"
+	defaultConfigDir   = ".config/dbx"
+	agentConfigHomeEnv = "DBX_AGENT_CONFIG_HOME"
 )
 
 type Profile struct {
@@ -192,21 +191,11 @@ func defaultConfigPaths() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	systemConfigDir := filepath.Join(home, defaultConfigDir)
 	if agentConfigHome := strings.TrimSpace(os.Getenv(agentConfigHomeEnv)); agentConfigHome != "" {
-		primaryConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
-		if primaryConfigHome == "" {
-			primaryConfigHome = agentConfigHome
-		}
-		paths := []string{filepath.Join(primaryConfigHome, "dbx")}
-		if systemConfigHome := strings.TrimSpace(os.Getenv(systemConfigHomeEnv)); systemConfigHome != "" {
-			paths = appendUniquePath(paths, filepath.Join(systemConfigHome, "dbx"))
-		}
-		return appendUniquePath(paths, filepath.Join(home, defaultConfigDir)), nil
+		return appendUniquePath([]string{filepath.Join(agentConfigHome, "dbx")}, systemConfigDir), nil
 	}
-	if configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configHome != "" {
-		return []string{filepath.Join(configHome, "dbx")}, nil
-	}
-	return []string{filepath.Join(home, defaultConfigDir)}, nil
+	return []string{systemConfigDir}, nil
 }
 
 func appendUniquePath(paths []string, path string) []string {

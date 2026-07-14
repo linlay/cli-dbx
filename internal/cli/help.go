@@ -26,7 +26,8 @@ Flow:
   1. dbx conn test <name>
   2. dbx inspect table <name> <table>
   3. dbx query <name> 'select ...'
-  Config files live in ~/.config/dbx/<name>.toml.
+  Config files live in ~/.config/dbx/<name>.toml by default.
+  DBX_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
 
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100
@@ -124,7 +125,7 @@ Options:
   --format <json|table>         result format; default json
   --verbose                     include engine, risk, and meta
   --dry-run                     validate policy without executing
-  --config <path>               read a specific config file
+  --config <path>               read only a specific config file or directory
   --max-rows-affected <n>       write safety limit; default 1000
 
 Examples:
@@ -228,7 +229,7 @@ When to use:
 Options:
   --format <csv|json>           export file format; default csv
   --limit <n>                   limit rows written to the file
-  --config <path>               read a specific config file
+  --config <path>               read only a specific config file or directory
   --verbose                     include engine and meta
 
 Example:

@@ -99,9 +99,9 @@ tags = ["local"]
 
 ### Agent Platform 专属配置
 
-当 Agent Platform 启动 dbx 时，会把当前 agent 的 `.config` 设为 `XDG_CONFIG_HOME`，并保留系统 XDG 根供回退。dbx 会优先读取 `$XDG_CONFIG_HOME/dbx/<connection>.toml`；agent 未定义该连接时，再读取系统 XDG 目录或 `~/.config/dbx`。`conn list` 合并两侧连接，重名连接以 agent 配置为准。
+系统配置目录固定为 `~/.config/dbx`。当 Agent Platform 启动 dbx 时，可以设置 `DBX_AGENT_CONFIG_HOME` 指向当前 agent 的私有配置根目录；dbx 会优先读取 `$DBX_AGENT_CONFIG_HOME/dbx/<connection>.toml`，agent 未定义该连接时才读取 `~/.config/dbx/<connection>.toml`。`conn list` 合并两侧连接，重名连接以 agent 配置为准。
 
-显式传入 `--config <path>` 时只读取该路径，不使用 agent 或系统回退。agent 中已经存在但无法解析的同名连接会直接报错，避免意外访问系统连接。连接文件可能包含数据库访问资料，应放在私有运行时目录且不得提交。
+显式传入 `--config <path>` 时只读取该文件或目录，不使用 agent 或系统回退。路径不存在、连接不存在、名称不匹配或配置无法解析时都会直接报错。agent 中已经存在但无法解析的同名连接也会直接报错，避免意外访问系统连接。连接文件可能包含数据库访问资料，应放在私有运行时目录且不得提交。
 
 最小 PostgreSQL 例子：
 
@@ -174,6 +174,8 @@ tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
 ```
 
 Windows 使用 `Expand-Archive` 或其他 zip 工具解压后运行 `dbx.exe version`。
+
+维护者打包时，正式版本由 Git 跟踪的仓库根目录 [`VERSION`](./VERSION) 统一管理；更新该文件后运行 `scripts/release/build.sh`，无需传入版本号。
 
 维护者的构建、打包、发布流程见 [AGENTS.md](./AGENTS.md)。
 

@@ -13,6 +13,7 @@ import (
 func TestLoadNamedUsesDefaultConfigDirAndNormalizesRelativePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(agentConfigHomeEnv, "")
 
 	configDir := filepath.Join(home, ".config", "dbx")
 	if err := os.MkdirAll(filepath.Join(configDir, "data"), 0o755); err != nil {
@@ -54,11 +55,10 @@ password = "plain-secret"
 
 func TestDefaultConfigUsesAgentConnectionThenSystemFallback(t *testing.T) {
 	home := t.TempDir()
-	agentHome := filepath.Join(t.TempDir(), ".config")
-	systemHome := filepath.Join(t.TempDir(), "xdg")
+	agentHome := t.TempDir()
+	systemHome := filepath.Join(home, ".config")
 	t.Setenv("HOME", home)
 	t.Setenv(agentConfigHomeEnv, agentHome)
-	t.Setenv(systemConfigHomeEnv, systemHome)
 
 	writeProfile := func(dir, name, database string) {
 		t.Helper()
@@ -98,30 +98,46 @@ func TestDefaultConfigUsesAgentConnectionThenSystemFallback(t *testing.T) {
 	}
 }
 
-func TestDefaultAgentConfigHonorsXDGConfigHomeOverride(t *testing.T) {
+func TestDefaultConfigUsesDBXAgentConfigHomeAndIgnoresLegacyEnvironment(t *testing.T) {
 	home := t.TempDir()
 	agentHome := t.TempDir()
-	customConfigHome := t.TempDir()
+	legacyAgentHome := t.TempDir()
+	legacySystemHome := t.TempDir()
+	xdgConfigHome := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(agentConfigHomeEnv, agentHome)
-	t.Setenv("XDG_CONFIG_HOME", customConfigHome)
+	t.Setenv("AP_AGENT_CONFIG_HOME", legacyAgentHome)
+	t.Setenv("AP_SYSTEM_XDG_CONFIG_HOME", legacySystemHome)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
 	paths, err := defaultConfigPaths()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := paths[0], filepath.Join(customConfigHome, "dbx"); got != want {
-		t.Fatalf("primary config path = %q, want %q", got, want)
+	want := []string{filepath.Join(agentHome, "dbx"), filepath.Join(home, ".config", "dbx")}
+	if !samePaths(paths, want) {
+		t.Fatalf("config paths = %q, want %q", paths, want)
 	}
+}
+
+func samePaths(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestDefaultConfigDoesNotFallbackWhenAgentConnectionIsInvalid(t *testing.T) {
 	home := t.TempDir()
-	agentHome := filepath.Join(t.TempDir(), ".config")
-	systemHome := filepath.Join(t.TempDir(), "xdg")
+	agentHome := t.TempDir()
+	systemHome := filepath.Join(home, ".config")
 	t.Setenv("HOME", home)
 	t.Setenv(agentConfigHomeEnv, agentHome)
-	t.Setenv(systemConfigHomeEnv, systemHome)
 	for _, dir := range []string{agentHome, systemHome} {
 		if err := os.MkdirAll(filepath.Join(dir, "dbx"), 0o700); err != nil {
 			t.Fatal(err)
@@ -139,8 +155,10 @@ func TestDefaultConfigDoesNotFallbackWhenAgentConnectionIsInvalid(t *testing.T) 
 }
 
 func TestExplicitConfigDoesNotUseAgentFallback(t *testing.T) {
-	agentHome := filepath.Join(t.TempDir(), ".config")
+	home := t.TempDir()
+	agentHome := t.TempDir()
 	explicitDir := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv(agentConfigHomeEnv, agentHome)
 	if err := os.MkdirAll(filepath.Join(agentHome, "dbx"), 0o700); err != nil {
 		t.Fatal(err)
@@ -151,6 +169,61 @@ func TestExplicitConfigDoesNotUseAgentFallback(t *testing.T) {
 	if _, err := LoadNamed(explicitDir, "reader"); err == nil || !strings.Contains(err.Error(), explicitDir) {
 		t.Fatalf("expected explicit config not-found error, got %v", err)
 	}
+}
+
+func TestExplicitConfigErrorsDoNotFallback(t *testing.T) {
+	home := t.TempDir()
+	agentHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(agentConfigHomeEnv, agentHome)
+
+	writeProfile := func(dir, name string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, "dbx"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		raw := "[connection]\nengine = \"sqlite\"\npath = \":memory:\"\nallow_actions = [\"query\"]\n"
+		if err := os.WriteFile(filepath.Join(dir, "dbx", name+".toml"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProfile(agentHome, "reader")
+	writeProfile(filepath.Join(home, ".config"), "reader")
+
+	t.Run("directory missing connection", func(t *testing.T) {
+		explicitDir := t.TempDir()
+		if _, err := LoadNamed(explicitDir, "reader"); err == nil || !strings.Contains(err.Error(), explicitDir) {
+			t.Fatalf("expected explicit directory error, got %v", err)
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		explicitPath := filepath.Join(t.TempDir(), "reader.toml")
+		if _, err := LoadNamed(explicitPath, "reader"); err == nil || !strings.Contains(err.Error(), explicitPath) {
+			t.Fatalf("expected missing explicit file error, got %v", err)
+		}
+	})
+
+	t.Run("invalid file", func(t *testing.T) {
+		explicitPath := filepath.Join(t.TempDir(), "reader.toml")
+		if err := os.WriteFile(explicitPath, []byte("[connection\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadNamed(explicitPath, "reader"); err == nil || !strings.Contains(err.Error(), explicitPath) {
+			t.Fatalf("expected invalid explicit file error, got %v", err)
+		}
+	})
+
+	t.Run("name mismatch", func(t *testing.T) {
+		explicitPath := filepath.Join(t.TempDir(), "other.toml")
+		raw := "[connection]\nengine = \"sqlite\"\npath = \":memory:\"\nallow_actions = [\"query\"]\n"
+		if err := os.WriteFile(explicitPath, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadNamed(explicitPath, "reader"); err == nil || !strings.Contains(err.Error(), "does not match config file") {
+			t.Fatalf("expected explicit file name-mismatch error, got %v", err)
+		}
+	})
 }
 
 func TestValueSourceResolvesEncryptedPassword(t *testing.T) {
