@@ -26,6 +26,7 @@ type Spec struct {
 	Path           string
 	Role           string
 	AllowActions   []action.Action
+	AllowTables    []string
 	Tags           []string
 	ReadOnly       bool
 	Timeout        time.Duration
@@ -80,6 +81,7 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		Path:          profile.Connection.Path,
 		Role:          profile.Connection.Role,
 		Tags:          profile.Connection.Tags,
+		AllowTables:   parseAllowTables(profile.Connection.AllowTables),
 		ReadOnly:      profile.Connection.ReadOnly,
 		Timeout:       profile.Connection.EffectiveTimeout(),
 		SecretSources: map[string]string{},
@@ -165,6 +167,98 @@ func finalize(spec Spec) (Spec, error) {
 
 func (s Spec) AllowsAction(target action.Action) bool {
 	return action.Contains(s.AllowActions, target)
+}
+
+func (s Spec) RestrictsTables() bool {
+	return len(s.AllowTables) > 0
+}
+
+func (s Spec) AllowsTable(object string) bool {
+	if !s.RestrictsTables() {
+		return true
+	}
+	object = normalizeTablePattern(object)
+	if object == "" {
+		return false
+	}
+	for _, pattern := range s.AllowTables {
+		if tablePatternMatches(pattern, object) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseAllowTables(raw []string) []string {
+	out := make([]string, 0, len(raw))
+	seen := map[string]struct{}{}
+	for _, part := range raw {
+		pattern := normalizeTablePattern(part)
+		if pattern == "" {
+			continue
+		}
+		key := strings.ToLower(pattern)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, pattern)
+	}
+	return out
+}
+
+func normalizeTablePattern(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.Trim(raw, "`\"'")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ".")
+	for i, part := range parts {
+		parts[i] = strings.Trim(strings.TrimSpace(part), "`\"'")
+	}
+	return strings.Join(parts, ".")
+}
+
+func tablePatternMatches(pattern, object string) bool {
+	pattern = strings.ToLower(normalizeTablePattern(pattern))
+	object = strings.ToLower(normalizeTablePattern(object))
+	if pattern == "" || object == "" {
+		return false
+	}
+	if !strings.Contains(pattern, ".") && strings.Contains(object, ".") {
+		parts := strings.Split(object, ".")
+		object = parts[len(parts)-1]
+	}
+	return wildcardMatch(pattern, object)
+}
+
+func wildcardMatch(pattern, value string) bool {
+	if pattern == "*" {
+		return true
+	}
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == value
+	}
+	if parts[0] != "" && !strings.HasPrefix(value, parts[0]) {
+		return false
+	}
+	pos := len(parts[0])
+	for i := 1; i < len(parts); i++ {
+		part := parts[i]
+		if part == "" {
+			continue
+		}
+		idx := strings.Index(value[pos:], part)
+		if idx < 0 {
+			return false
+		}
+		pos += idx + len(part)
+	}
+	last := parts[len(parts)-1]
+	return last == "" || strings.HasSuffix(value, last)
 }
 
 func inferEnvironment(name string, tags []string) string {

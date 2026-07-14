@@ -182,6 +182,7 @@ func ConnectionMeta(spec conn.Spec) map[string]any {
 		"role":          spec.Role,
 		"read_only":     spec.ReadOnly,
 		"allow_actions": action.Strings(spec.AllowActions),
+		"allow_tables":  spec.AllowTables,
 		"tags":          spec.Tags,
 		"secretSource":  spec.SecretSources,
 	}

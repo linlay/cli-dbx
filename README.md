@@ -115,6 +115,7 @@ database = "appdb"
 password = "dbx-aes-gcm:v1:..."
 sslmode = "disable"
 allow_actions = ["query"]
+allow_tables = ["users", "public.audit_*"]
 tags = ["dev", "local"]
 ```
 
@@ -142,9 +143,11 @@ allow_actions = ["query"]
 操作层面可以先这样理解：
 
 - `allow_actions` 控制这个连接允许哪些命令动作
+- `allow_tables` 可选，控制这个连接允许访问哪些表；省略或留空表示不限制
+- `allow_tables` 支持多个数组项和 `*` 通配符，例如 `["users", "orders", "public.audit_*"]`
 - 推荐显式写出最小权限集合，不依赖隐式默认值
 
-如果你要理解 `allow_actions` 和为什么 `tx` 只允许 `query/update`，请看 [AGENTS.md](./AGENTS.md)。
+如果你要理解 `allow_actions`、`allow_tables` 和为什么 `tx` 只允许 `query/update`，请看 [AGENTS.md](./AGENTS.md)。
 
 也可以直接参考：
 

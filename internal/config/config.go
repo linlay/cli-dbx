@@ -48,6 +48,7 @@ type ConnectionConfig struct {
 	Role         string      `toml:"role"`
 	Tags         []string    `toml:"tags"`
 	AllowActions []string    `toml:"allow_actions"`
+	AllowTables  []string    `toml:"allow_tables"`
 }
 
 type ValueSource struct {
