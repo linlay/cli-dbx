@@ -96,7 +96,7 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 	if profile.Connection.DSN != "" {
 		spec.DSN = profile.Connection.DSN
 		if dsnHasPassword(spec.Engine, spec.DSN) {
-			spec.Warnings = append(spec.Warnings, "connection.dsn contains an inline password; use structured connection fields with password = \"dbx-aes-gcm:v1:...\"")
+			spec.Warnings = append(spec.Warnings, "connection.dsn contains an inline password; use structured connection fields with password = \"dbx-aes-gcm:v2:...\"")
 		}
 		if spec.Engine == "" {
 			spec.Engine = inferEngine(profile.Connection.DSN)
@@ -110,7 +110,7 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		spec.DSN = value
 		spec.SecretSources["dsn"] = "env"
 		if dsnHasPassword(spec.Engine, value) {
-			spec.Warnings = append(spec.Warnings, "dsn_env resolved to a DSN with an inline password; use structured connection fields with password = \"dbx-aes-gcm:v1:...\"")
+			spec.Warnings = append(spec.Warnings, "dsn_env resolved to a DSN with an inline password; use structured connection fields with password = \"dbx-aes-gcm:v2:...\"")
 		}
 		if spec.Engine == "" {
 			spec.Engine = inferEngine(value)

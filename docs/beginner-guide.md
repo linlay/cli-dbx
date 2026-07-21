@@ -154,7 +154,7 @@ host = "127.0.0.1"
 port = 5432
 user = "app"
 database = "appdb"
-password = "dbx-aes-gcm:v1:..."
+password = "dbx-aes-gcm:v2:..."
 sslmode = "disable"
 allow_actions = ["query"]
 tags = ["dev"]
@@ -165,6 +165,8 @@ tags = ["dev"]
 ./dbx conn test local-pg
 ```
 
+`secret encrypt` 只要求输入数据库密码。加密密钥自动保存在当前用户的系统凭据库里，以后运行 `conn test` 或 `query` 不需要再输入口令。生成的 v2 密文只在当前机器和用户下可用。
+
 ### MySQL
 
 ```toml
@@ -174,7 +176,7 @@ host = "127.0.0.1"
 port = 3306
 user = "app"
 database = "appdb"
-password = "dbx-aes-gcm:v1:..."
+password = "dbx-aes-gcm:v2:..."
 allow_actions = ["query"]
 ```
 
@@ -200,8 +202,10 @@ allow_actions = ["query"]
 
 检查：
 
-- `password` 是否是 `dbx-aes-gcm:v1:...` 格式
-- 输入的 master passphrase 是否和加密时一致
+- `password` 是否是 `dbx-aes-gcm:v2:...` 格式
+- 配置是否从另一台机器复制而来；v2 需要在当前机器重新加密
+- 系统凭据库是否可用并已解锁；Linux 需要 Secret Service 登录集合
+- 如果是旧 `dbx-aes-gcm:v1:...`，输入的 master passphrase 是否和加密时一致
 - 如果还在用明文 `password = "..."`，DBX 会允许但会提示不推荐
 
 ### SQLite 查不到库

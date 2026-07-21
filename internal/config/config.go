@@ -17,7 +17,7 @@ import (
 
 const (
 	defaultConfigDir   = ".config/dbx"
-	agentConfigHomeEnv = "DBX_AGENT_CONFIG_HOME"
+	agentConfigHomeEnv = "AP_AGENT_CONFIG_HOME"
 )
 
 type Profile struct {
@@ -279,16 +279,16 @@ func (v ValueSource) ResolveWithWarnings(ctx context.Context) (string, string, [
 			}
 			return value, "encrypted", nil, nil
 		}
-		return v.Value, "plaintext", []string{"plaintext password is not recommended; use dbx secret encrypt and store password = \"dbx-aes-gcm:v1:...\""}, nil
+		return v.Value, "plaintext", []string{"plaintext password is not recommended; use dbx secret encrypt and store password = \"dbx-aes-gcm:v2:...\""}, nil
 	}
 	if v.Env != "" {
-		return "", "env", nil, fmt.Errorf("password.env is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
+		return "", "env", nil, fmt.Errorf("password.env is disabled; store an encrypted password in password = \"dbx-aes-gcm:v2:...\"")
 	}
 	if v.File != "" {
-		return "", "file", nil, fmt.Errorf("password.file is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
+		return "", "file", nil, fmt.Errorf("password.file is disabled; store an encrypted password in password = \"dbx-aes-gcm:v2:...\"")
 	}
 	if len(v.Cmd) > 0 {
-		return "", "cmd", nil, fmt.Errorf("password.cmd is disabled; store an encrypted password in password = \"dbx-aes-gcm:v1:...\"")
+		return "", "cmd", nil, fmt.Errorf("password.cmd is disabled; store an encrypted password in password = \"dbx-aes-gcm:v2:...\"")
 	}
 	return "", "", nil, nil
 }

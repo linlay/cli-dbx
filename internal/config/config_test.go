@@ -98,15 +98,15 @@ func TestDefaultConfigUsesAgentConnectionThenSystemFallback(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigUsesDBXAgentConfigHomeAndIgnoresLegacyEnvironment(t *testing.T) {
+func TestDefaultConfigUsesSharedAgentConfigHomeAndIgnoresLegacyEnvironment(t *testing.T) {
 	home := t.TempDir()
 	agentHome := t.TempDir()
-	legacyAgentHome := t.TempDir()
+	legacyDBXHome := t.TempDir()
 	legacySystemHome := t.TempDir()
 	xdgConfigHome := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(agentConfigHomeEnv, agentHome)
-	t.Setenv("AP_AGENT_CONFIG_HOME", legacyAgentHome)
+	t.Setenv("DBX_AGENT_CONFIG_HOME", legacyDBXHome)
 	t.Setenv("AP_SYSTEM_XDG_CONFIG_HOME", legacySystemHome)
 	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
@@ -244,6 +244,23 @@ func TestValueSourceResolvesEncryptedPassword(t *testing.T) {
 	}
 }
 
+func TestValueSourceResolvesKeyringEncryptedPassword(t *testing.T) {
+	store := newConfigMemoryKeyStore()
+	ctx := secret.WithKeyStore(context.Background(), store)
+	encrypted, err := secret.EncryptStringV2(ctx, "db-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value, source, warnings, err := (ValueSource{Value: encrypted}).ResolveWithWarnings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "db-secret" || source != "encrypted" || len(warnings) != 0 {
+		t.Fatalf("unexpected encrypted resolution: value=%q source=%q warnings=%v", value, source, warnings)
+	}
+}
+
 func TestValueSourceDisablesAgentReadableSources(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -263,6 +280,27 @@ func TestValueSourceDisablesAgentReadableSources(t *testing.T) {
 			}
 		})
 	}
+}
+
+type configMemoryKeyStore struct {
+	keys map[string][]byte
+}
+
+func newConfigMemoryKeyStore() *configMemoryKeyStore {
+	return &configMemoryKeyStore{keys: map[string][]byte{}}
+}
+
+func (s *configMemoryKeyStore) Get(_ context.Context, keyID string) ([]byte, error) {
+	key, ok := s.keys[keyID]
+	if !ok {
+		return nil, secret.ErrSecretKeyNotFound
+	}
+	return append([]byte(nil), key...), nil
+}
+
+func (s *configMemoryKeyStore) Set(_ context.Context, keyID string, key []byte) error {
+	s.keys[keyID] = append([]byte(nil), key...)
+	return nil
 }
 
 func TestLoadNamedSupportsExplicitFileAndNameMatch(t *testing.T) {

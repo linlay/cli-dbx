@@ -99,7 +99,7 @@ tags = ["local"]
 
 ### Agent Platform 专属配置
 
-系统配置目录固定为 `~/.config/dbx`。当 Agent Platform 启动 dbx 时，可以设置 `DBX_AGENT_CONFIG_HOME` 指向当前 agent 的私有配置根目录；dbx 会优先读取 `$DBX_AGENT_CONFIG_HOME/dbx/<connection>.toml`，agent 未定义该连接时才读取 `~/.config/dbx/<connection>.toml`。`conn list` 合并两侧连接，重名连接以 agent 配置为准。
+系统配置目录固定为 `~/.config/dbx`。当 Agent Platform 启动 dbx 时，可以设置公共的 `AP_AGENT_CONFIG_HOME` 指向当前 agent 的私有配置根目录；dbx 会优先读取 `$AP_AGENT_CONFIG_HOME/dbx/<connection>.toml`，agent 未定义该连接时才读取 `~/.config/dbx/<connection>.toml`。`conn list` 合并两侧连接，重名连接以 agent 配置为准。旧的 `DBX_AGENT_CONFIG_HOME` 不再识别。
 
 显式传入 `--config <path>` 时只读取该文件或目录，不使用 agent 或系统回退。路径不存在、连接不存在、名称不匹配或配置无法解析时都会直接报错。agent 中已经存在但无法解析的同名连接也会直接报错，避免意外访问系统连接。连接文件可能包含数据库访问资料，应放在私有运行时目录且不得提交。
 
@@ -112,7 +112,7 @@ host = "127.0.0.1"
 port = 5432
 user = "app"
 database = "appdb"
-password = "dbx-aes-gcm:v1:..."
+password = "dbx-aes-gcm:v2:..."
 sslmode = "disable"
 allow_actions = ["query"]
 allow_tables = ["users", "public.audit_*"]
@@ -128,7 +128,7 @@ host = "127.0.0.1"
 port = 3306
 user = "app"
 database = "appdb"
-password = "dbx-aes-gcm:v1:..."
+password = "dbx-aes-gcm:v2:..."
 allow_actions = ["query"]
 ```
 
@@ -138,7 +138,11 @@ allow_actions = ["query"]
 ./dbx secret encrypt
 ```
 
-密码可以继续写成 `password = "明文"`，但 DBX 会输出 warning；`password.env`、`password.cmd`、`password.file` 默认禁用。`dsn_env` 仍可用，但如果 DSN 里带密码，也会提示改用结构化连接字段加加密密码。
+命令只提示输入一次数据库密码，然后输出 `password = "dbx-aes-gcm:v2:..."`。v2 使用 AES-256-GCM，每条密文的随机密钥自动保存在当前操作系统用户的凭据库中：macOS Keychain、Windows Credential Manager，或 Linux Secret Service。DBX 运行时静默取回密钥，不再要求输入 master passphrase，也不提供解密、导出或显示密钥的 CLI 命令。
+
+v2 密文与当前机器和操作系统用户绑定；复制到另一台机器后需要在那里重新运行 `dbx secret encrypt`。Linux 必须存在可用且已解锁的 Secret Service 登录集合，否则加密和运行时解密会明确失败。旧的 `dbx-aes-gcm:v1:...` 配置仍兼容，读取旧格式时才会继续提示原 master passphrase。
+
+密码可以继续写成 `password = "明文"`，但 DBX 会输出 warning；`password.env`、`password.cmd`、`password.file` 默认禁用。`dsn_env` 仍可用，但如果 DSN 里带密码，也会提示改用结构化连接字段和 v2 加密密码。
 
 操作层面可以先这样理解：
 
@@ -215,8 +219,10 @@ go test ./...
 
 - 连接不存在：确认配置文件名和连接名一致
 - 动作不允许：检查 `allow_actions`
-- 加密密码解不开：确认输入的是加密时使用的 master passphrase
-- 密码来源被禁用：改用 `password = "dbx-aes-gcm:v1:..."`
+- v2 密钥不存在：配置可能来自另一台机器；在当前机器重新运行 `dbx secret encrypt`
+- 系统凭据库不可用：解锁 macOS/Windows 凭据库，或确认 Linux Secret Service 的登录集合可用
+- 旧 v1 密码解不开：确认输入的是加密时使用的 master passphrase
+- 密码来源被禁用：改用 `password = "dbx-aes-gcm:v2:..."`
 - SQLite 路径不对：相对路径是相对于配置文件目录，不是当前工作目录
 
 ## 6. 进一步阅读

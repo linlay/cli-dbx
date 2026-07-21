@@ -176,25 +176,114 @@ func TestVersionCommandAndFlag(t *testing.T) {
 }
 
 func TestSecretEncryptOutputsTomlPasswordLine(t *testing.T) {
-	stdin := bytes.NewBufferString("master-passphrase\ndb-secret\n")
-	result := runCommand(t, stdin, "secret", "encrypt")
+	store := newAppMemoryKeyStore()
+	ctx := secret.WithKeyStore(context.Background(), store)
+	stdin := bytes.NewBufferString("db-secret\n")
+	result := runCommandContext(t, ctx, stdin, "secret", "encrypt")
 	if result.code != ExitSuccess {
 		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitSuccess, result.code, result.stdout, result.stderr)
 	}
-	if !strings.Contains(result.stderr, "master passphrase:") || !strings.Contains(result.stderr, "database password:") {
+	if strings.Contains(result.stderr, "master passphrase:") || !strings.Contains(result.stderr, "database password:") {
 		t.Fatalf("expected secret prompts on stderr, got %q", result.stderr)
 	}
 	raw := strings.TrimSpace(result.stdout)
-	if !strings.HasPrefix(raw, `password = "dbx-aes-gcm:v1:`) || !strings.HasSuffix(raw, `"`) {
+	if !strings.HasPrefix(raw, `password = "dbx-aes-gcm:v2:`) || !strings.HasSuffix(raw, `"`) {
 		t.Fatalf("unexpected secret encrypt output: %q", result.stdout)
 	}
 	value := strings.TrimSuffix(strings.TrimPrefix(raw, `password = "`), `"`)
-	plain, err := secret.DecryptStringWithPassphrase("master-passphrase", value)
+	plain, err := secret.DecryptString(ctx, value)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plain != "db-secret" {
 		t.Fatalf("decrypted password = %q", plain)
+	}
+}
+
+func TestSecretHelpDoesNotExposePlaintextCommands(t *testing.T) {
+	result := runCommand(t, nil, "secret", "--help")
+	if result.code != ExitSuccess {
+		t.Fatalf("expected exit %d, got %d", ExitSuccess, result.code)
+	}
+	for _, forbidden := range []string{"decrypt", "export", "show-key"} {
+		if strings.Contains(strings.ToLower(result.stdout), forbidden) {
+			t.Fatalf("secret help must not contain %q:\n%s", forbidden, result.stdout)
+		}
+	}
+	if !strings.Contains(result.stdout, "encrypt") {
+		t.Fatalf("secret help must contain encrypt:\n%s", result.stdout)
+	}
+}
+
+func TestConnShowDecryptsV2WithoutPromptOrSecretOutput(t *testing.T) {
+	store := newAppMemoryKeyStore()
+	ctx := secret.WithKeyStore(context.Background(), store)
+	encrypted, err := secret.EncryptStringV2(ctx, "db-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDir := writeAppConnectionConfig(t, "local-mysql", `
+[connection]
+engine = "mysql"
+host = "127.0.0.1"
+port = 3306
+user = "app"
+database = "appdb"
+password = "`+encrypted+`"
+allow_actions = ["query"]
+`)
+
+	result := runCommandContext(t, ctx, nil, "conn", "show", "--config", configDir, "local-mysql")
+	if result.code != ExitSuccess {
+		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitSuccess, result.code, result.stdout, result.stderr)
+	}
+	if result.stderr != "" || strings.Contains(result.stdout, "master passphrase") {
+		t.Fatalf("v2 resolution must not prompt, stdout=%q stderr=%q", result.stdout, result.stderr)
+	}
+	for _, forbidden := range []string{"db-secret", "app:db-secret@", encrypted} {
+		if strings.Contains(result.stdout, forbidden) {
+			t.Fatalf("conn show leaked %q in %q", forbidden, result.stdout)
+		}
+	}
+	if !strings.Contains(result.stdout, "***") {
+		t.Fatalf("conn show should contain a redacted DSN: %q", result.stdout)
+	}
+}
+
+func TestConnShowReportsMissingV2KeyWithStableCode(t *testing.T) {
+	encryptStore := newAppMemoryKeyStore()
+	encryptCtx := secret.WithKeyStore(context.Background(), encryptStore)
+	encrypted, err := secret.EncryptStringV2(encryptCtx, "db-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDir := writeAppConnectionConfig(t, "local-mysql", `
+[connection]
+engine = "mysql"
+host = "127.0.0.1"
+user = "app"
+database = "appdb"
+password = "`+encrypted+`"
+allow_actions = ["query"]
+`)
+	missingCtx := secret.WithKeyStore(context.Background(), newAppMemoryKeyStore())
+
+	result := runCommandContext(t, missingCtx, nil, "conn", "show", "--config", configDir, "local-mysql")
+	if result.code != ExitFailure {
+		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitFailure, result.code, result.stdout, result.stderr)
+	}
+	if result.stderr != "" {
+		t.Fatalf("expected structured error on stdout, got stderr=%q", result.stderr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.stdout), &payload); err != nil {
+		t.Fatalf("unmarshal error output: %v\n%s", err, result.stdout)
+	}
+	if payload["code"] != "secret_key_not_found" {
+		t.Fatalf("expected secret_key_not_found, got %#v", payload)
+	}
+	if strings.Contains(result.stdout, "db-secret") {
+		t.Fatalf("error output leaked password: %q", result.stdout)
 	}
 }
 
@@ -331,6 +420,11 @@ func TestCommandFlagsWorkBeforeAndAfterPositionals(t *testing.T) {
 
 func runCommand(t *testing.T, stdin *bytes.Buffer, args ...string) commandResult {
 	t.Helper()
+	return runCommandContext(t, context.Background(), stdin, args...)
+}
+
+func runCommandContext(t *testing.T, ctx context.Context, stdin *bytes.Buffer, args ...string) commandResult {
+	t.Helper()
 
 	var in *bytes.Buffer
 	if stdin != nil {
@@ -341,13 +435,34 @@ func runCommand(t *testing.T, stdin *bytes.Buffer, args ...string) commandResult
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := ExecuteContext(context.Background(), args, in, &stdout, &stderr)
+	code := ExecuteContext(ctx, args, in, &stdout, &stderr)
 
 	return commandResult{
 		code:   code,
 		stdout: stdout.String(),
 		stderr: stderr.String(),
 	}
+}
+
+type appMemoryKeyStore struct {
+	keys map[string][]byte
+}
+
+func newAppMemoryKeyStore() *appMemoryKeyStore {
+	return &appMemoryKeyStore{keys: map[string][]byte{}}
+}
+
+func (s *appMemoryKeyStore) Get(_ context.Context, keyID string) ([]byte, error) {
+	key, ok := s.keys[keyID]
+	if !ok {
+		return nil, secret.ErrSecretKeyNotFound
+	}
+	return append([]byte(nil), key...), nil
+}
+
+func (s *appMemoryKeyStore) Set(_ context.Context, keyID string, key []byte) error {
+	s.keys[keyID] = append([]byte(nil), key...)
+	return nil
 }
 
 func makeSQLiteFixture(t *testing.T, allowActions []string, rows int) string {
@@ -386,6 +501,15 @@ tags = ["local"]
 	}
 
 	return configDir
+}
+
+func writeAppConnectionConfig(t *testing.T, name, raw string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func quoteStrings(values []string) string {

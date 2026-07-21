@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
 	"github.com/linlay/cli-dbx/internal/output"
+	"github.com/linlay/cli-dbx/internal/secret"
 	"github.com/linlay/cli-dbx/internal/sqlanalyzer"
 	"github.com/linlay/cli-dbx/internal/sqlclass"
 )
@@ -964,12 +966,27 @@ func redactDSN(spec conn.Spec) string {
 	if spec.Engine == "sqlite" {
 		return spec.DSN
 	}
+	// PostgreSQL URL format: scheme://user:password@host/...
+	if spec.Engine == "postgres" {
+		if idx := strings.Index(spec.DSN, "@"); idx >= 0 {
+			if start := strings.Index(spec.DSN, "://"); start >= 0 {
+				return spec.DSN[:start+3] + "***:***" + spec.DSN[idx:]
+			}
+		}
+	}
+	// MySQL DSN format: user:password@protocol(host)/... Passwords may contain @.
+	if spec.Engine == "mysql" {
+		if idx := strings.LastIndex(spec.DSN, "@"); idx >= 0 {
+			prefix := spec.DSN[:idx]
+			if colon := strings.Index(prefix, ":"); colon >= 0 {
+				return spec.DSN[:colon+1] + "***" + spec.DSN[idx:]
+			}
+		}
+	}
 	if idx := strings.Index(spec.DSN, "@"); idx >= 0 {
-		// PostgreSQL URL format: scheme://user:password@host/...
 		if start := strings.Index(spec.DSN, "://"); start >= 0 {
 			return spec.DSN[:start+3] + "***:***" + spec.DSN[idx:]
 		}
-		// MySQL DSN format: user:password@protocol(host)/...
 		prefix := spec.DSN[:idx]
 		if colon := strings.LastIndex(prefix, ":"); colon >= 0 {
 			return spec.DSN[:colon+1] + "***" + spec.DSN[idx:]
@@ -1015,6 +1032,14 @@ func nextForClass(class sqlclass.StatementClass, more bool) string {
 }
 
 func classifyErrorCode(err error) string {
+	switch {
+	case errors.Is(err, secret.ErrSecretStoreUnavailable):
+		return "secret_store_unavailable"
+	case errors.Is(err, secret.ErrSecretKeyNotFound):
+		return "secret_key_not_found"
+	case errors.Is(err, secret.ErrEncryptedPasswordInvalid):
+		return "encrypted_password_invalid"
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "not found"):
@@ -1072,6 +1097,12 @@ func hintForCode(code string) string {
 		return "Use only query and update steps in tx."
 	case "missing_sql":
 		return "Provide the required command arguments, such as <conn> <sql> or --plan <path>."
+	case "secret_store_unavailable":
+		return "Unlock or configure the operating system credential store, then retry."
+	case "secret_key_not_found":
+		return "Run dbx secret encrypt on this machine and replace the encrypted password in the connection file."
+	case "encrypted_password_invalid":
+		return "Replace the encrypted password with a fresh value from dbx secret encrypt."
 	default:
 		return "Check the SQL text, target connection, or input file."
 	}
@@ -1091,6 +1122,10 @@ func nextForCode(code string) string {
 		return "fetch_more"
 	case "missing_plan", "tx_unsupported_action":
 		return "tx"
+	case "secret_store_unavailable":
+		return "configure_secret_store"
+	case "secret_key_not_found", "encrypted_password_invalid":
+		return "secret_encrypt"
 	default:
 		return "refine_sql"
 	}
@@ -1122,6 +1157,12 @@ func summaryForError(code string) string {
 		return "transaction step uses an unsupported action"
 	case "missing_sql":
 		return "required command input is missing"
+	case "secret_store_unavailable":
+		return "system credential store is unavailable"
+	case "secret_key_not_found":
+		return "encrypted password key is unavailable on this machine"
+	case "encrypted_password_invalid":
+		return "encrypted password is invalid"
 	default:
 		return "database command failed"
 	}
@@ -1143,13 +1184,47 @@ func (a *App) renderError(format string, verbose bool, spec conn.Spec, act actio
 		Verbose:        verbose,
 	}
 	if err != nil {
-		env.Warnings = []string{err.Error()}
+		env.Warnings = []string{sanitizeError(err, spec)}
 	}
 	env.Warnings = append(env.Warnings, spec.Warnings...)
 	if printErr := output.PrintEnvelope(format, env); printErr != nil {
 		return printErr
 	}
 	return &ExitError{Code: 1}
+}
+
+func sanitizeError(err error, spec conn.Spec) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if spec.DSN == "" || spec.Engine == "sqlite" {
+		return message
+	}
+	message = strings.ReplaceAll(message, spec.DSN, redactDSN(spec))
+	if password := passwordFromDSN(spec.Engine, spec.DSN); password != "" {
+		message = strings.ReplaceAll(message, password, "***")
+		message = strings.ReplaceAll(message, url.QueryEscape(password), "***")
+	}
+	return message
+}
+
+func passwordFromDSN(engine, dsn string) string {
+	switch engine {
+	case "postgres":
+		parsed, err := url.Parse(dsn)
+		if err == nil && parsed.User != nil {
+			password, _ := parsed.User.Password()
+			return password
+		}
+	case "mysql":
+		if at := strings.LastIndex(dsn, "@"); at > 0 {
+			if colon := strings.Index(dsn[:at], ":"); colon >= 0 {
+				return dsn[colon+1 : at]
+			}
+		}
+	}
+	return ""
 }
 
 func printEnvelopeWithWarnings(format string, spec conn.Spec, env output.Envelope) error {

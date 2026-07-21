@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/linlay/cli-dbx/internal/buildinfo"
+	"github.com/linlay/cli-dbx/internal/conn"
+	"github.com/linlay/cli-dbx/internal/secret"
 	_ "modernc.org/sqlite"
 )
 
@@ -749,6 +751,40 @@ func TestTxRollsBackOnFailureAndRejectsSchemaSteps(t *testing.T) {
 	}
 	if schemaPayload["code"] != "tx_unsupported_action" {
 		t.Fatalf("expected tx_unsupported_action, got %#v", schemaPayload)
+	}
+}
+
+func TestClassifySecretErrorsBeforeGenericNotFound(t *testing.T) {
+	testCases := []struct {
+		err  error
+		want string
+	}{
+		{err: fmt.Errorf("connection password: %w", secret.ErrSecretStoreUnavailable), want: "secret_store_unavailable"},
+		{err: fmt.Errorf("connection password: %w", secret.ErrSecretKeyNotFound), want: "secret_key_not_found"},
+		{err: fmt.Errorf("connection password: %w", secret.ErrEncryptedPasswordInvalid), want: "encrypted_password_invalid"},
+	}
+	for _, tc := range testCases {
+		if got := classifyErrorCode(tc.err); got != tc.want {
+			t.Fatalf("classifyErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestSanitizeErrorRemovesDSNAndPassword(t *testing.T) {
+	testCases := []conn.Spec{
+		{Engine: "postgres", DSN: "postgres://app:p%40ssword@127.0.0.1:5432/appdb?sslmode=require"},
+		{Engine: "mysql", DSN: "app:p@ssword@tcp(127.0.0.1:3306)/appdb?parseTime=true"},
+	}
+	for _, spec := range testCases {
+		password := passwordFromDSN(spec.Engine, spec.DSN)
+		err := fmt.Errorf("driver failed for %s with password %s", spec.DSN, password)
+		got := sanitizeError(err, spec)
+		if strings.Contains(got, spec.DSN) || password != "" && strings.Contains(got, password) {
+			t.Fatalf("sanitized error leaked secret: %q", got)
+		}
+		if !strings.Contains(got, "***") {
+			t.Fatalf("sanitized error did not contain redaction marker: %q", got)
+		}
 	}
 }
 

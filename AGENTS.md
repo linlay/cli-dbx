@@ -41,6 +41,8 @@
   命令分发、参数解析、帮助信息、错误 envelope。
 - `internal/config`
   单连接配置文件加载、路径归一化、密码来源解析。
+- `internal/secret`
+  v1/v2 密文处理、系统凭据库适配和运行时密钥解析。
 - `internal/conn`
   把配置解析成可执行的连接规格 `Spec`。
 - `internal/action`
@@ -95,6 +97,15 @@ allow_actions = ["query", "update", "schema", "admin"]
 ```
 
 `allow_actions` 是 DBX 层保护，不依赖数据库账号本身的授权能力。
+
+### 密码加密
+
+- `dbx-aes-gcm:v2:<key-id>:...` 是默认格式。数据库密码保存在配置密文中，每条密文的随机 AES-256-GCM 密钥保存在当前用户的系统凭据库。
+- 系统凭据库固定使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，不允许降级到环境变量、命令或密钥文件。
+- v2 运行时静默解密；密钥缺失、凭据库不可用或密文损坏都必须失败关闭。
+- `dbx-aes-gcm:v1:...` 仅为兼容保留，读取时仍由 passphrase provider 获取旧 master passphrase。
+- CLI 只提供 `dbx secret encrypt`，不得增加 decrypt、export、show-key 等明文或密钥输出入口。
+- v2 的保护目标是避免配置文件直接泄露明文，不抵御同一操作系统用户主动读取系统凭据库或进程内存。
 
 ### 动作模型
 
@@ -151,6 +162,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 - `dbx tx <conn> --plan <path.json>`
 - `dbx import file ...`
 - `dbx export table ...`
+- `dbx secret encrypt`
 
 接口约定：
 
@@ -224,3 +236,5 @@ go test ./...
 - `tx` 不支持跨连接事务，也不支持跨多次 CLI 调用的事务会话。
 - `tx` 不支持 `schema` 或 `admin`，主要是为了保持回滚语义可预期。
 - 生产态连接默认更保守；带 `prod` 特征的连接会阻止高风险动作配置。
+- v2 密文绑定创建它的机器和操作系统用户，复制配置到其他机器后必须重新加密。
+- Linux v2 依赖可用且已解锁的 Secret Service 登录集合；不可用时不回退到其他密码来源。

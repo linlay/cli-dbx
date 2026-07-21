@@ -45,6 +45,36 @@ allow_actions = ["query"]
 	}
 }
 
+func TestResolveDecryptsKeyringEncryptedPassword(t *testing.T) {
+	store := newConnMemoryKeyStore()
+	ctx := secret.WithKeyStore(context.Background(), store)
+	encrypted, err := secret.EncryptStringV2(ctx, "db-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDir := writeConfig(t, "local-mysql", `
+[connection]
+engine = "mysql"
+host = "127.0.0.1"
+port = 3306
+user = "app"
+database = "appdb"
+password = "`+encrypted+`"
+allow_actions = ["query"]
+`)
+
+	spec, err := Resolve(ctx, ResolveInput{ConfigPath: configDir, Name: "local-mysql", Action: action.Query})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.DSN != "app:db-secret@tcp(127.0.0.1:3306)/appdb?parseTime=true" {
+		t.Fatalf("dsn = %q", spec.DSN)
+	}
+	if spec.SecretSources["password"] != "encrypted" {
+		t.Fatalf("secret source = %#v", spec.SecretSources)
+	}
+}
+
 func TestResolvePlaintextPasswordWarns(t *testing.T) {
 	configDir := writeConfig(t, "local-mysql", `
 [connection]
@@ -93,6 +123,27 @@ func writeConfig(t *testing.T, name, raw string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+type connMemoryKeyStore struct {
+	keys map[string][]byte
+}
+
+func newConnMemoryKeyStore() *connMemoryKeyStore {
+	return &connMemoryKeyStore{keys: map[string][]byte{}}
+}
+
+func (s *connMemoryKeyStore) Get(_ context.Context, keyID string) ([]byte, error) {
+	key, ok := s.keys[keyID]
+	if !ok {
+		return nil, secret.ErrSecretKeyNotFound
+	}
+	return append([]byte(nil), key...), nil
+}
+
+func (s *connMemoryKeyStore) Set(_ context.Context, keyID string, key []byte) error {
+	s.keys[keyID] = append([]byte(nil), key...)
+	return nil
 }
 
 func TestParseAllowTablesTrimsAndDeduplicates(t *testing.T) {

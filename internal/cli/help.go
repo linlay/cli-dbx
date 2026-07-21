@@ -27,7 +27,7 @@ Flow:
   2. dbx inspect table <name> <table>
   3. dbx query <name> 'select ...'
   Config files live in ~/.config/dbx/<name>.toml by default.
-  DBX_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
+  AP_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
 
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100
@@ -258,6 +258,10 @@ func secretHelp() string {
 When to use:
   Encrypt a database password before putting it in ~/.config/dbx/<name>.toml.
 
+Behavior:
+  Stores a per-value encryption key in the operating system credential store.
+  The generated v2 value is bound to the current machine and OS user.
+
 Commands:
   encrypt
 
@@ -265,7 +269,7 @@ Examples:
   dbx secret encrypt
 
 Next:
-  Store the output as password = "dbx-aes-gcm:v1:..." in the connection file.
+  Store the output as password = "dbx-aes-gcm:v2:..." in the connection file.
 `
 }
 
