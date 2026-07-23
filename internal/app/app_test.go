@@ -200,6 +200,90 @@ func TestSecretEncryptOutputsTomlPasswordLine(t *testing.T) {
 	}
 }
 
+func TestSecretEncryptAcceptsPasswordArgumentWithoutReadingStdin(t *testing.T) {
+	testCases := []struct {
+		name     string
+		password string
+		useDash  bool
+	}{
+		{name: "empty", password: ""},
+		{name: "spaces and special characters", password: "db secret !@#$%^&*()"},
+		{name: "leading dash", password: "-database-password", useDash: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := newAppMemoryKeyStore()
+			ctx := secret.WithKeyStore(context.Background(), store)
+			stdin := bytes.NewBufferString("stdin-must-not-be-read\n")
+			args := []string{"secret", "encrypt"}
+			if testCase.useDash {
+				args = append(args, "--")
+			}
+			args = append(args, testCase.password)
+
+			result := runCommandContext(t, ctx, stdin, args...)
+			if result.code != ExitSuccess {
+				t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitSuccess, result.code, result.stdout, result.stderr)
+			}
+			if stdin.String() != "stdin-must-not-be-read\n" {
+				t.Fatalf("password argument mode consumed stdin: %q", stdin.String())
+			}
+			if result.stderr != "" {
+				t.Fatalf("expected no password prompt or stderr output, got %q", result.stderr)
+			}
+			if testCase.password != "" && (strings.Contains(result.stdout, testCase.password) || strings.Contains(result.stderr, testCase.password)) {
+				t.Fatalf("password leaked in command output: stdout=%q stderr=%q", result.stdout, result.stderr)
+			}
+
+			raw := strings.TrimSpace(result.stdout)
+			if !strings.HasPrefix(raw, `password = "dbx-aes-gcm:v2:`) || !strings.HasSuffix(raw, `"`) {
+				t.Fatalf("unexpected secret encrypt output: %q", result.stdout)
+			}
+			value := strings.TrimSuffix(strings.TrimPrefix(raw, `password = "`), `"`)
+			plain, err := secret.DecryptString(ctx, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plain != testCase.password {
+				t.Fatalf("decrypted password = %q, want %q", plain, testCase.password)
+			}
+		})
+	}
+}
+
+func TestSecretEncryptRejectsMultiplePasswordArgumentsWithoutLeakingThem(t *testing.T) {
+	first := "first-sensitive-password"
+	second := "second-sensitive-password"
+	result := runCommand(t, nil, "secret", "encrypt", first, second)
+	if result.code != ExitUsage {
+		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitUsage, result.code, result.stdout, result.stderr)
+	}
+	for _, password := range []string{first, second} {
+		if strings.Contains(result.stdout, password) || strings.Contains(result.stderr, password) {
+			t.Fatalf("password leaked in argument error: stdout=%q stderr=%q", result.stdout, result.stderr)
+		}
+	}
+}
+
+func TestSecretEncryptPasswordArgumentDoesNotLeakOnStoreFailure(t *testing.T) {
+	store := newAppMemoryKeyStore()
+	store.setErr = fmt.Errorf("%w: test backend unavailable", secret.ErrSecretStoreUnavailable)
+	ctx := secret.WithKeyStore(context.Background(), store)
+	password := "store-failure-sensitive-password"
+
+	result := runCommandContext(t, ctx, bytes.NewBufferString("unused\n"), "secret", "encrypt", password)
+	if result.code != ExitFailure {
+		t.Fatalf("expected exit %d, got %d stdout=%q stderr=%q", ExitFailure, result.code, result.stdout, result.stderr)
+	}
+	if !strings.Contains(result.stderr, secret.ErrSecretStoreUnavailable.Error()) {
+		t.Fatalf("expected credential store failure, got %q", result.stderr)
+	}
+	if strings.Contains(result.stdout, password) || strings.Contains(result.stderr, password) {
+		t.Fatalf("password leaked on credential store failure: stdout=%q stderr=%q", result.stdout, result.stderr)
+	}
+}
+
 func TestSecretHelpDoesNotExposePlaintextCommands(t *testing.T) {
 	result := runCommand(t, nil, "secret", "--help")
 	if result.code != ExitSuccess {
@@ -210,8 +294,33 @@ func TestSecretHelpDoesNotExposePlaintextCommands(t *testing.T) {
 			t.Fatalf("secret help must not contain %q:\n%s", forbidden, result.stdout)
 		}
 	}
-	if !strings.Contains(result.stdout, "encrypt") {
-		t.Fatalf("secret help must contain encrypt:\n%s", result.stdout)
+	for _, expected := range []string{"encrypt", "dbx secret encrypt '<password>'", "one-time exposure"} {
+		if !strings.Contains(result.stdout, expected) {
+			t.Fatalf("secret help must contain %q:\n%s", expected, result.stdout)
+		}
+	}
+}
+
+func TestSecretEncryptHelpDocumentsBothInputModesAndExposure(t *testing.T) {
+	result := runCommand(t, nil, "secret", "encrypt", "--help")
+	if result.code != ExitSuccess {
+		t.Fatalf("expected exit %d, got %d", ExitSuccess, result.code)
+	}
+	for _, expected := range []string{
+		"dbx secret encrypt",
+		"dbx secret encrypt <password>",
+		"without terminal echo",
+		"shell history",
+		"process inspection",
+	} {
+		if !strings.Contains(result.stdout, expected) {
+			t.Fatalf("secret encrypt help must contain %q:\n%s", expected, result.stdout)
+		}
+	}
+	for _, forbidden := range []string{"decrypt", "export", "show-key"} {
+		if strings.Contains(strings.ToLower(result.stdout), forbidden) {
+			t.Fatalf("secret encrypt help must not contain %q:\n%s", forbidden, result.stdout)
+		}
 	}
 }
 
@@ -445,7 +554,8 @@ func runCommandContext(t *testing.T, ctx context.Context, stdin *bytes.Buffer, a
 }
 
 type appMemoryKeyStore struct {
-	keys map[string][]byte
+	keys   map[string][]byte
+	setErr error
 }
 
 func newAppMemoryKeyStore() *appMemoryKeyStore {
@@ -461,6 +571,9 @@ func (s *appMemoryKeyStore) Get(_ context.Context, keyID string) ([]byte, error)
 }
 
 func (s *appMemoryKeyStore) Set(_ context.Context, keyID string, key []byte) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
 	s.keys[keyID] = append([]byte(nil), key...)
 	return nil
 }

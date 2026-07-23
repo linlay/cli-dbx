@@ -261,12 +261,20 @@ When to use:
 Behavior:
   Stores a per-value encryption key in the operating system credential store.
   The generated v2 value is bound to the current machine and OS user.
+  With no password argument, prompts without terminal echo.
+  With one password argument, encrypts immediately without reading stdin.
+
+Warning:
+  A password argument is visible to the calling agent, shell history, command
+  audit, and process inspection. Use it only when one-time exposure is acceptable.
 
 Commands:
   encrypt
 
 Examples:
   dbx secret encrypt
+  dbx secret encrypt '<password>'
+  dbx secret encrypt -- '-password'
 
 Next:
   Store the output as password = "dbx-aes-gcm:v2:..." in the connection file.

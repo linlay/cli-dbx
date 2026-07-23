@@ -132,17 +132,49 @@ password = "dbx-aes-gcm:v2:..."
 allow_actions = ["query"]
 ```
 
-生成加密密码：
+交互生成加密密码（推荐给人类使用）：
 
 ```bash
 ./dbx secret encrypt
 ```
 
-命令只提示输入一次数据库密码，然后输出 `password = "dbx-aes-gcm:v2:..."`。v2 使用 AES-256-GCM，每条密文的随机密钥自动保存在当前操作系统用户的凭据库中：macOS Keychain、Windows Credential Manager，或 Linux Secret Service。DBX 运行时静默取回密钥，不再要求输入 master passphrase，也不提供解密、导出或显示密钥的 CLI 命令。
+无参数模式只提示输入一次数据库密码，终端不会回显输入。需要由智能体或一次性迁移脚本直接调用时，也可以传入一个位置参数：
+
+```bash
+dbx secret encrypt '<password>'
+```
+
+密码以 `-` 开头时，用 `--` 结束选项解析：
+
+```bash
+dbx secret encrypt -- '-password'
+```
+
+参数模式不会提示，也不会读取 stdin；两种模式都只输出 `password = "dbx-aes-gcm:v2:..."`。注意，位置参数中的明文会暴露给调用它的智能体、Shell history、命令审计以及可能的进程参数查看工具，只适合接受这次明文暴露的迁移场景。DBX 自身不会把明文写到 stdout、stderr 或错误信息中。
+
+v2 使用 AES-256-GCM，每条密文的随机密钥自动保存在当前操作系统用户的凭据库中：macOS Keychain、Windows Credential Manager，或 Linux Secret Service。DBX 运行时静默取回密钥，不再要求输入 master passphrase，也不提供解密、导出或显示密钥的 CLI 命令。
 
 v2 密文与当前机器和操作系统用户绑定；复制到另一台机器后需要在那里重新运行 `dbx secret encrypt`。Linux 必须存在可用且已解锁的 Secret Service 登录集合，否则加密和运行时解密会明确失败。旧的 `dbx-aes-gcm:v1:...` 配置仍兼容，读取旧格式时才会继续提示原 master passphrase。
 
 密码可以继续写成 `password = "明文"`，但 DBX 会输出 warning；`password.env`、`password.cmd`、`password.file` 默认禁用。`dsn_env` 仍可用，但如果 DSN 里带密码，也会提示改用结构化连接字段和 v2 加密密码。
+
+在 agent-platform 发布包中，DBX 位于包根目录的 `bin/dbx`（Windows 为 `bin\dbx.exe`），并会进入 Agent Terminal 和 host Bash 的 `PATH`。可以先定位再运行：
+
+```bash
+# macOS / Linux
+which dbx
+dbx secret encrypt
+
+# Windows Command Prompt
+where dbx
+dbx secret encrypt
+
+# Windows PowerShell
+Get-Command dbx
+dbx secret encrypt
+```
+
+通过 ZenMind Desktop 安装 agent-platform 后，可在控制中心打开 Agent Platform 服务详情查看“安装目录”，然后在其 `bin/dbx` 或 `bin\dbx.exe` 找到同一个程序。当前已安装的旧服务包不会自动获得新命令语法，需要等待后续 Platform/Desktop 发布包同步新版 DBX。
 
 操作层面可以先这样理解：
 

@@ -26,13 +26,16 @@ func newSecretCommand() *cobra.Command {
 		Short: "Encrypt DBX secrets for config files",
 		Long: strings.TrimSpace(`
 Use secret to produce encrypted values that can be stored directly in a DBX
-connection TOML file.
+connection TOML file. Run encrypt without a password argument for hidden
+interactive input, or pass one password argument when one-time exposure is
+acceptable.
 `),
 		UsageLines: []string{
 			"dbx secret [command]",
 		},
 		Example: strings.TrimSpace(`
 dbx secret encrypt
+dbx secret encrypt '<password>'
 `),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -46,26 +49,39 @@ dbx secret encrypt
 
 func newSecretEncryptCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "encrypt",
+		Use:   "encrypt [password]",
 		Short: "Encrypt a database password for password = \"...\"",
 		Long: strings.TrimSpace(`
 Encrypt a database password using AES-256-GCM. DBX stores the encryption key in
 the operating system credential store and prints a machine-bound TOML password
-line. It never prints the plaintext password or encryption key.
+line. With no argument, DBX prompts for the password without terminal echo.
+
+Passing the password as an argument skips the prompt, but exposes the plaintext
+to the calling agent, shell history, command audit, and process inspection. Use
+the argument form only when that one-time exposure is acceptable. DBX never
+prints the plaintext password or encryption key.
 `),
 		UsageLines: []string{
 			"dbx secret encrypt",
+			"dbx secret encrypt <password>",
 		},
 		Example: strings.TrimSpace(`
 dbx secret encrypt
+dbx secret encrypt 'database-password'
 `),
-		Args:          cobra.NoArgs,
+		Args:          cobra.RangeArgs(0, 1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			password, err := readSecretLine(cmd.InOrStdin(), cmd.ErrOrStderr(), "database password: ")
-			if err != nil {
-				return failuref("%v", err)
+			password := ""
+			if len(args) == 1 {
+				password = args[0]
+			} else {
+				var err error
+				password, err = readSecretLine(cmd.InOrStdin(), cmd.ErrOrStderr(), "database password: ")
+				if err != nil {
+					return failuref("%v", err)
+				}
 			}
 			encrypted, err := secret.EncryptStringV2(cmd.Context(), password)
 			if err != nil {

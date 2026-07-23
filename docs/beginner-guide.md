@@ -165,7 +165,17 @@ tags = ["dev"]
 ./dbx conn test local-pg
 ```
 
-`secret encrypt` 只要求输入数据库密码。加密密钥自动保存在当前用户的系统凭据库里，以后运行 `conn test` 或 `query` 不需要再输入口令。生成的 v2 密文只在当前机器和用户下可用。
+无参数的 `secret encrypt` 会隐藏回显地读取数据库密码。也可以由智能体直接传入一次性位置参数：
+
+```bash
+dbx secret encrypt '<password>'
+```
+
+参数模式会立即返回 v2 TOML 密码行，不提示也不读取 stdin；密码以 `-` 开头时使用 `dbx secret encrypt -- '-password'`。这种方式会让明文进入智能体上下文、Shell history、命令审计和可能的进程参数，只应在接受一次明文暴露时使用。
+
+加密密钥自动保存在当前用户的系统凭据库里，以后运行 `conn test` 或 `query` 不需要再输入口令。生成的 v2 密文只在当前机器和用户下可用，DBX 不提供解密、导出或显示密钥的命令。
+
+在 agent-platform 的 Agent Terminal 中可先用 `which dbx`（Windows Command Prompt 使用 `where dbx`，PowerShell 使用 `Get-Command dbx`）定位后直接运行。通过 ZenMind Desktop 安装时，也可以在控制中心的 Agent Platform 服务详情中查看安装目录，DBX 位于其 `bin/dbx` 或 `bin\dbx.exe`。旧安装包需要在后续发布同步新版 DBX 后才支持位置参数。
 
 ### MySQL
 
