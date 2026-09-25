@@ -240,3 +240,10 @@ go test ./...
 - 生产态连接默认更保守；带 `prod` 特征的连接会阻止高风险动作配置。
 - v2 密文绑定创建它的机器和操作系统用户，复制配置到其他机器后必须重新加密。
 - Linux v2 依赖可用且已解锁的 Secret Service 登录集合；不可用时不回退到其他密码来源。
+
+
+## Platform 连接器发布包
+
+项目位于 `agent-platform-connectors/dbx`，`connector/` 是 connector.json 模板、cli.json、skills 与全部资源的唯一源码。`VERSION` 同时控制 CLI 和连接器发布版本；模板不维护 version，构建时生成。任何 CLI、清单或技能改动均需发布新版本。
+
+现有 Shell/PowerShell 发布脚本额外生成 `dist/<version>/builtin.dbx_<version>_<os>_<arch>.zip`，内容位于 `runtime/connectors/builtin.dbx/`，包含声明、完整 skills 和目标平台 bin。Platform 按完整包摘要消费，不修改包内内容。原 CLI 独立发布包继续提供。包生成器检查 VERSION 满足 cli.json.minVersion（包含 SemVer 预发布版本比较）。
