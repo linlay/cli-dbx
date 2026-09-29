@@ -17,6 +17,14 @@ dbx inspect table <name> <table> [schema]
 
 先确认连接和表结构，再执行 SQL。
 
+## ODBC 驱动
+
+```bash
+dbx odbc dir
+dbx odbc list
+```
+目录规则见 `configuration.md`。
+
 ## SQL 动作
 
 ```bash

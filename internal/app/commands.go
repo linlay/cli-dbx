@@ -1,9 +1,11 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/linlay/cli-dbx/internal/odbcdriver"
 	"github.com/spf13/cobra"
 )
 
@@ -88,6 +90,61 @@ func newConnLeafCommand(flags *connFlags, name, short string, argsValidator cobr
 		}
 	}
 	return cmd
+}
+
+func newODBCCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "odbc",
+		Short:        "Find vendor ODBC driver libraries",
+		Long:         "Find vendor ODBC driver libraries in DBX_DRIVER_DIR (default: ~/.config/dbx/drivers). DBX does not download or install drivers.",
+		Args:         cobra.NoArgs,
+		UsageLines:   []string{"dbx odbc [command]"},
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newODBCDirCommand(), newODBCListCommand())
+	return cmd
+}
+
+func newODBCDirCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "dir",
+		Short:        "Show the ODBC driver directory",
+		UsageLines:   []string{"dbx odbc dir"},
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, err := odbcdriver.ResolveDir("")
+			if err != nil {
+				return failuref("resolve driver directory: %v", err)
+			}
+			return writeODBCEnvelope(cmd, "driver_dir", "ODBC driver directory resolved", map[string]any{"path": dir})
+		},
+	}
+}
+
+func newODBCListCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "list",
+		Short:        "List vendor ODBC library candidates",
+		UsageLines:   []string{"dbx odbc list"},
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			drivers, err := odbcdriver.List(cmd.Context(), "")
+			if err != nil {
+				return failuref("list drivers: %v", err)
+			}
+			return writeODBCEnvelope(cmd, "driver_list", fmt.Sprintf("%d ODBC driver(s) found", len(drivers)), map[string]any{"drivers": drivers})
+		},
+	}
+}
+
+func writeODBCEnvelope(cmd *cobra.Command, kind, summary string, data any) error {
+	payload := map[string]any{"ok": true, "kind": kind, "summary": summary, "data": data}
+	return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 }
 
 func newInspectCommand() *cobra.Command {

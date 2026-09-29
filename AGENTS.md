@@ -27,6 +27,8 @@
   - PostgreSQL：`pgx`
   - MySQL：`go-sql-driver/mysql`
   - SQLite：`modernc.org/sqlite`
+  - SQL Server：微软 `go-mssqldb`；Oracle：官方 `go-oracledb/v26 v26.0.1-beta`（Go ≥ 1.26.6）；达梦：社区 `gitee.com/chunanyong/dm`
+  - 显式 `driver = "odbc"` 的连接：通过 `alexbrainman/odbc` 调用厂商 ODBC 库
 - 配置格式：TOML
 - 构建与测试：`go build`、`go test`
 - 发布：仓库内 `scripts/release/build.sh`
@@ -44,13 +46,15 @@
 - `internal/secret`
   v1/v2 密文处理、系统凭据库适配和运行时密钥解析。
 - `internal/conn`
-  把配置解析成可执行的连接规格 `Spec`。
+  把配置解析成可执行的连接规格 `Spec`；`native.go` 统一组装所有内置驱动的连接参数，`odbc.go` 处理厂商 ODBC。
 - `internal/action`
   动作模型：`query / update / schema / admin`。
 - `internal/sqlclass` / `internal/sqlanalyzer`
   SQL 分类、单语句校验、危险写入检测。
 - `internal/db`
-  具体数据库执行、导入导出、事务计划执行。
+  具体数据库执行、导入导出、事务计划执行。`Open` 只区分内置与 ODBC；`db.go` 集中内置驱动注册和连接初始化，Oracle 官方驱动的结构化 Connector 也归入该路径。各数据库的结构查询保留在 `db.go`，优先在原有函数的 `switch` 中扩充，不为代码整理搬迁原有实现。
+- `internal/odbcdriver`
+  在配置目录检索厂商 ODBC 库、注册通用 ODBC 适配库并检查当前构建是否启用 ODBC，不执行握手、不下载或安装。Windows 只读取已有 ODBC 注册，确认注册库路径与指定文件一致。Windows x64 使用系统驱动管理器。macOS M 系列发布构建使用 CGO 和 `odbc` 标签，随包分发 unixODBC 与 libltdl；Linux ODBC 仍需自行启用。
 - `internal/output`
   结构化输出、摘要、表格输出。
 
@@ -69,8 +73,8 @@
 - `internal/`
   核心实现
 - `docs/`
-  面向用户的补充文档
-- `testdata/`
+  使用补充与开发专题文档；驱动选型、编译和打包细节见 `docs/odbc.md`，不放入运行时 Skill
+- `examples/`
   配置示例
 - `scripts/release/`
   打包与发布脚本
@@ -92,11 +96,16 @@
 
 ```toml
 [connection]
-engine = "postgres|mysql|sqlite"
+engine = "postgres|mysql|sqlite|sqlserver|oracle|dm"
+# driver = "odbc" # 显式选择外部厂商库；否则使用内置驱动
 allow_actions = ["query", "update", "schema", "admin"]
 ```
 
+`engine` 表示数据库类型或兼容方言；配置 `Driver`（TOML `driver`）选择 native/odbc，`Spec.Driver` 只保存解析后的 Go 驱动名。
+
 `allow_actions` 是 DBX 层保护，不依赖数据库账号本身的授权能力。
+
+OceanBase、TDSQL 等兼容数据库复用 MySQL/PostgreSQL 示例，由用户配置标准 `engine`；解析、执行、元数据、标识符和脱敏逻辑不按这些品牌设置分支。
 
 ### 密码加密
 
@@ -165,9 +174,11 @@ allow_actions = ["query", "update", "schema", "admin"]
 - `dbx import file ...`
 - `dbx export table ...`
 - `dbx secret encrypt`
+- `dbx odbc dir|list`
 
 接口约定：
 
+- 导入、导出的表名统一经 `internal/db/db.go` 的 `QuoteTable` 按数据库方言逐段转义，不按接入方式分支。
 - 默认只允许单语句 SQL
 - `query/update/schema/admin` 要求 SQL 类型和命令动作匹配
 - `tx` 为单连接、单次调用、单事务
@@ -184,6 +195,8 @@ allow_actions = ["query", "update", "schema", "admin"]
   危险写入缺少 `WHERE`
 - `tx_unsupported_action`
   事务步骤使用了 `schema` 或 `admin`
+- `driver_missing`
+  指定目录缺少可选驱动；错误数据给出数据库类型、驱动目录和市场包名
 
 ## 7. 开发要点
 
@@ -194,6 +207,7 @@ allow_actions = ["query", "update", "schema", "admin"]
 - `allow_actions` 是 DBX 层最重要的能力边界之一，任何变更都必须补测试。
 - `tx` 的边界优先保持简单和可验证，不要直接扩展到跨进程会话事务。
 - 对外词汇优先使用 `query / update / schema / admin / tx`，保持动作边界清晰。
+- 命令改名时同时核对 `internal/app` 的命令树与 `internal/cli/help.go` 的帮助内容；帮助只保留用途、参数、示例和操作约束，数据库兼容映射、驱动版本及构建说明留在 docs。
 - 用户可见能力变更需要同步更新：
   - CLI help
   - `README.md`
@@ -241,9 +255,20 @@ go test ./...
 - v2 密文绑定创建它的机器和操作系统用户，复制配置到其他机器后必须重新加密。
 - Linux v2 依赖可用且已解锁的 Secret Service 登录集合；不可用时不回退到其他密码来源。
 
+### 当前不提供的功能
+
+以下场景暂不纳入开发、测试和发布支持范围；已有代码或示例不代表支持承诺：
+
+- Windows ARM64。
+- 非 M 系列芯片的 Mac（Intel/x86_64）；macOS 仅考虑 Apple Silicon（M 系列/ARM64）。
+- OceanBase Oracle 模式；OceanBase 仅考虑 MySQL 模式。
+- TDSQL 的 MySQL、PostgreSQL 兼容模式以外的模式。
+
+此范围不限制 `package-connector` 接受已有平台产物；打包器保留原有平台清单，具体构建与发布目标由发布脚本选择。
+
 
 ## Platform 连接器发布包
 
 项目位于 `agent-platform-connectors/dbx`，`connector/` 是 connector.json 模板、cli.json、skills 与全部资源的唯一源码。`VERSION` 同时控制 CLI 和连接器发布版本；模板不维护 version，构建时生成。任何 CLI、清单或技能改动均需发布新版本。
 
-现有 Shell/PowerShell 发布脚本额外生成 `dist/<version>/builtin.dbx_<version>_<os>_<arch>.zip`，内容位于 `runtime/connectors/builtin.dbx/`，包含声明、完整 skills 和目标平台 bin。Platform 按完整包摘要消费，不修改包内内容。原 CLI 独立发布包继续提供。包生成器检查 VERSION 满足 cli.json.minVersion（包含 SemVer 预发布版本比较）。
+现有 Shell/PowerShell 发布脚本额外生成 `dist/<version>/builtin.dbx_<version>_<os>_<arch>.zip`，内容位于 `runtime/connectors/builtin.dbx/`，包含声明、完整 skills 和目标平台 bin。Platform 按完整包摘要消费，不修改包内内容。原 CLI 独立发布包继续提供。macOS 包在 Apple Silicon 上构建；`scripts/release/build.sh` 内的 macOS 分支完成 CLI 构建、运行库复制、包内相对加载路径修正和重新签名。独立包使用 `dbx` 旁的 `lib/`；连接器包使用 `bin/lib/`，同时保留许可证。厂商库仍由用户按需安装，打包不得修改构建机的原库或调用运行时下载。包生成器检查 VERSION 满足 cli.json.minVersion（包含 SemVer 预发布版本比较）。

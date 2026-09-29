@@ -70,7 +70,7 @@ func newRootCommand(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 		Use:   "dbx",
 		Short: "Database CLI for connection management, SQL execution, and data movement",
 		Long: strings.TrimSpace(`
-DBX is a database CLI for MySQL, PostgreSQL, and SQLite.
+DBX is a database CLI for inspecting connections and running SQL.
 
 It keeps connection management explicit, separates query/update/schema/admin actions,
 and returns results in formats that work well in terminals and scripts.
@@ -103,6 +103,7 @@ dbx tx local-pg --plan ./plan.json
 
 	cmd.AddCommand(
 		newConnCommand(),
+		newODBCCommand(),
 		newInspectCommand(),
 		newSQLCommand("query", "Run read-only SQL.", strings.TrimSpace(`
 Use query when you need read-only SQL.

@@ -31,23 +31,29 @@ type fileConfig struct {
 }
 
 type ConnectionConfig struct {
-	Engine       string      `toml:"engine"`
-	DSN          string      `toml:"dsn"`
-	DSNEnv       string      `toml:"dsn_env"`
-	Host         string      `toml:"host"`
-	Port         int         `toml:"port"`
-	User         string      `toml:"user"`
-	Password     ValueSource `toml:"password"`
-	Database     string      `toml:"database"`
-	Schema       string      `toml:"schema"`
-	Path         string      `toml:"path"`
-	SSLMode      string      `toml:"sslmode"`
-	ReadOnly     bool        `toml:"readonly"`
-	Timeout      string      `toml:"timeout"`
-	Role         string      `toml:"role"`
-	Tags         []string    `toml:"tags"`
-	AllowActions []string    `toml:"allow_actions"`
-	AllowTables  []string    `toml:"allow_tables"`
+	// Driver selects native or ODBC access.
+	Driver    string `toml:"driver"`
+	DriverDir string `toml:"driver_dir"`
+	// ODBCDriver is the vendor library path relative to DriverDir.
+	ODBCDriver   string            `toml:"odbc_driver"`
+	ODBCOptions  map[string]string `toml:"odbc_options"`
+	Engine       string            `toml:"engine"`
+	DSN          string            `toml:"dsn"`
+	DSNEnv       string            `toml:"dsn_env"`
+	Host         string            `toml:"host"`
+	Port         int               `toml:"port"`
+	User         string            `toml:"user"`
+	Password     ValueSource       `toml:"password"`
+	Database     string            `toml:"database"`
+	Schema       string            `toml:"schema"`
+	Path         string            `toml:"path"`
+	SSLMode      string            `toml:"sslmode"`
+	ReadOnly     bool              `toml:"readonly"`
+	Timeout      string            `toml:"timeout"`
+	Role         string            `toml:"role"`
+	Tags         []string          `toml:"tags"`
+	AllowActions []string          `toml:"allow_actions"`
+	AllowTables  []string          `toml:"allow_tables"`
 }
 
 type ValueSource struct {

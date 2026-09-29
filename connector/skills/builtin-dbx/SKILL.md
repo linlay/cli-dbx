@@ -26,6 +26,8 @@ version: 0.1.0
 4. 写入、导入或事务先缩小范围，并使用可用的 `--dry-run`、`--max-rows-affected` 或事务约束。
 5. 执行后根据 envelope、影响行数或后续只读查询复核。
 
+新增连接配置见 `references/configuration.md`。
+
 已知命令契约时直接执行。只有不确定语法时才查看对应的 `dbx <command> --help`；不要机械执行整套 help。
 
 ## 安全边界

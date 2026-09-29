@@ -20,6 +20,7 @@ Use:
   import    load csv/json into a table
   export    write a table to a file
   secret    encrypt passwords for config files
+  odbc      find vendor ODBC libraries
   version   show build version
 
 Flow:

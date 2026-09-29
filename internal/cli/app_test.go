@@ -38,6 +38,15 @@ func TestHelpOutputsUseCompactTaskCards(t *testing.T) {
 		t.Fatalf("root help should omit design commentary, got:\n%s", root)
 	}
 
+	if !strings.Contains(root, "odbc      find vendor ODBC libraries") {
+		t.Fatalf("root help must advertise the ODBC command: %s", root)
+	}
+	for _, obsolete := range []string{"driver    find", "Built-in:", "OceanBase", "unixODBC", "CGO_ENABLED", "-tags odbc"} {
+		if strings.Contains(root, obsolete) {
+			t.Errorf("root help contains obsolete command or implementation detail %q", obsolete)
+		}
+	}
+
 	examples := captureStdout(t, func() error {
 		return New().Run(context.Background(), []string{"help", "examples"})
 	})
@@ -212,6 +221,58 @@ func TestQueryRequiresExplicitConnectionName(t *testing.T) {
 	}
 	if payload["code"] != "missing_sql" {
 		t.Fatalf("expected explicit-conn error, got %#v", payload)
+	}
+}
+
+func TestMissingOptionalDriverUsesStructuredError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	driverDir := filepath.Join(home, "custom drivers")
+	t.Setenv("DBX_DRIVER_DIR", driverDir)
+	configDir := t.TempDir()
+	configText := `[connection]
+engine = "oracle"
+driver = "odbc"
+host = "127.0.0.1"
+user = "app"
+database = "ORCLPDB1"
+allow_actions = ["query"]
+`
+	if err := os.WriteFile(filepath.Join(configDir, "finance.toml"), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() error {
+		err := New().Run(context.Background(), []string{"conn", "show", "--config", configDir, "finance"})
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out)
+	}
+	if payload["code"] != "driver_missing" || payload["next"] != "provide_driver" {
+		t.Fatalf("unexpected driver error: %#v", payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok || data["engine"] != "oracle" || data["market_package"] != "oracle-odbc" || data["driver_dir"] != driverDir {
+		t.Fatalf("unexpected missing driver data: %#v", payload["data"])
+	}
+}
+
+func TestOptionalDriverDSNRedaction(t *testing.T) {
+	tests := []conn.Spec{
+		{Engine: "dm", DSN: "dm://app:p@ss:w?/ #%&+@host:5236?connectTimeout=15000"},
+		{Engine: "oracle", DSN: "oracle://app:p%40ss@host:1521/PDB"},
+	}
+	for _, spec := range tests {
+		redacted := redactDSN(spec)
+		if strings.Contains(redacted, "p@ss") || strings.Contains(redacted, "p%40ss") || redacted != "[redacted]" {
+			t.Fatalf("password was not redacted for %s: %q", spec.Engine, redacted)
+		}
 	}
 }
 
@@ -770,6 +831,21 @@ func TestClassifySecretErrorsBeforeGenericNotFound(t *testing.T) {
 	}
 }
 
+func TestMySQLPasswordRedactionPreservesOriginalBehavior(t *testing.T) {
+	for _, password := range []string{"p@ssword", "p://ss:word"} {
+		spec := conn.Spec{Engine: "mysql", DSN: "app:" + password + "@tcp(localhost:3306)/appdb"}
+		if got := passwordFromDSN(spec.Engine, spec.DSN); got != password {
+			t.Fatalf("passwordFromDSN = %q, want %q", got, password)
+		}
+		if got := redactDSN(spec); got != "app:***@tcp(localhost:3306)/appdb" {
+			t.Fatalf("unexpected redacted DSN: %q", got)
+		}
+		if got := sanitizeError(fmt.Errorf("connection failed: %s", password), spec); got != "connection failed: ***" {
+			t.Fatalf("unexpected redacted error: %q", got)
+		}
+	}
+}
+
 func TestSanitizeErrorRemovesDSNAndPassword(t *testing.T) {
 	testCases := []conn.Spec{
 		{Engine: "postgres", DSN: "postgres://app:p%40ssword@127.0.0.1:5432/appdb?sslmode=require"},
@@ -905,4 +981,19 @@ func makeSQLiteConfigFileFixture(t *testing.T, rows int) string {
 		t.Fatal(err)
 	}
 	return configPath
+}
+
+func TestExportQualifiedTable(t *testing.T) {
+	configPath := makeSQLiteFixture(t, 2)
+	outFile := filepath.Join(t.TempDir(), "users.csv")
+	captureStdout(t, func() error {
+		return New().Run(context.Background(), []string{"export", "--config", configPath, "--format", "csv", "table", "main.users", "local-sqlite", outFile})
+	})
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "id,name\n1,user\n2,user\n" {
+		t.Fatalf("unexpected exported data: %s", content)
+	}
 }

@@ -6,15 +6,21 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"sort"
 	"strings"
 
+	_ "gitee.com/chunanyong/dm"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/microsoft/go-mssqldb"
+	"github.com/oracle/go-oracledb/v26/oracle"
 	_ "modernc.org/sqlite"
 
 	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/conn"
+	"github.com/linlay/cli-dbx/internal/odbcdriver"
 )
 
 type Column struct {
@@ -106,7 +112,16 @@ type execRunner interface {
 }
 
 func Open(spec conn.Spec) (*sql.DB, error) {
-	db, err := sql.Open(spec.Driver, spec.DSN)
+	var db *sql.DB
+	var err error
+	if spec.Driver == "odbc" {
+		if err := odbcdriver.Check(); err != nil {
+			return nil, err
+		}
+		db, err = sql.Open(spec.Driver, spec.DSN)
+	} else {
+		db, err = openNative(spec)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +129,35 @@ func Open(spec conn.Spec) (*sql.DB, error) {
 	db.SetMaxIdleConns(2)
 	db.SetMaxOpenConns(4)
 	return db, nil
+}
+
+func openNative(spec conn.Spec) (*sql.DB, error) {
+	if spec.Driver != "oracledb" {
+		return sql.Open(spec.Driver, spec.DSN)
+	}
+	// The official Oracle driver takes structured connector configuration.
+	u, err := url.Parse(spec.DSN)
+	if err != nil || u.Scheme != "oracle" || u.User == nil || u.Host == "" || u.Path == "" {
+		return nil, fmt.Errorf("invalid Oracle connection; use structured connection fields")
+	}
+	cfg := oracle.NewOracleDriverConfig()
+	cfg.ConnectDescriptor = "tcp://" + u.Host + u.EscapedPath()
+	cfg.Credentials.User = u.User.Username()
+	cfg.Credentials.Password, _ = u.User.Password()
+	connector, err := oracle.NewOracleConnector(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return sql.OpenDB(connector), nil
+}
+
+// These catalogs are shared by native Go and ODBC connections.
+func usesVendorCatalog(engine string) bool {
+	switch engine {
+	case "oracle", "dm", "sqlserver":
+		return true
+	}
+	return false
 }
 
 func Ping(ctx context.Context, spec conn.Spec) error {
@@ -168,7 +212,7 @@ func ExecuteGuarded(ctx context.Context, spec conn.Spec, sqlText string, maxRows
 		return 0, err
 	}
 	defer tx.Rollback()
-	count, err := executeWithRunner(ctx, tx, sqlText, maxRows)
+	count, err := executeWithRunner(ctx, tx, sqlText, maxRows, spec.Driver == "odbc" || usesVendorCatalog(spec.Engine))
 	if err != nil {
 		return count, err
 	}
@@ -211,7 +255,7 @@ func RunTxPlan(ctx context.Context, spec conn.Spec, plan TxPlan, queryLimit, def
 			if maxRows <= 0 {
 				maxRows = defaultMaxRows
 			}
-			count, err := executeWithRunner(ctx, tx, step.SQL, maxRows)
+			count, err := executeWithRunner(ctx, tx, step.SQL, maxRows, spec.Driver == "odbc" || usesVendorCatalog(spec.Engine))
 			if err != nil {
 				return TxRunResult{}, err
 			}
@@ -296,12 +340,15 @@ func queryWithRunner(ctx context.Context, runner queryRunner, sqlText string, of
 	return result, nil
 }
 
-func executeWithRunner(ctx context.Context, runner execRunner, sqlText string, maxRows int) (int64, error) {
+func executeWithRunner(ctx context.Context, runner execRunner, sqlText string, maxRows int, requireCount bool) (int64, error) {
 	res, err := runner.ExecContext(ctx, sqlText)
 	if err != nil {
 		return 0, err
 	}
-	count, _ := res.RowsAffected()
+	count, countErr := res.RowsAffected()
+	if requireCount && (countErr != nil || count < 0) {
+		return 0, fmt.Errorf("driver did not provide a reliable affected-row count; write protection cannot be verified")
+	}
 	if maxRows > 0 && count > int64(maxRows) {
 		return count, fmt.Errorf("rows affected %d exceeds max-rows-affected %d", count, maxRows)
 	}
@@ -321,6 +368,12 @@ func ListSchemas(ctx context.Context, spec conn.Spec) ([]string, error) {
 	switch spec.Engine {
 	case "postgres", "mysql":
 		query = "select schema_name from information_schema.schemata order by schema_name"
+	case "oracle":
+		query = "select username from all_users order by username"
+	case "dm":
+		query = "select name from sysobjects where type$ = 'SCH' order by name"
+	case "sqlserver":
+		query = "select name from sys.schemas order by name"
 	case "sqlite":
 		return []string{"main"}, nil
 	default:
@@ -358,13 +411,23 @@ func ListTables(ctx context.Context, spec conn.Spec, schema string) ([]TableInfo
 		if schema == "" {
 			schema = "public"
 		}
-		query = "select table_schema, table_name, table_type from information_schema.tables where table_schema = $1 order by table_name"
+		query = "select table_schema, table_name, table_type from information_schema.tables where table_schema = " + bind(spec, 1) + " order by table_name"
 		args = append(args, schema)
 	case "mysql":
 		if schema == "" {
 			schema = spec.Database
 		}
 		query = "select table_schema, table_name, table_type from information_schema.tables where table_schema = ? order by table_name"
+		args = append(args, schema)
+	case "oracle", "dm", "sqlserver":
+		schema, err = vendorCurrentSchema(ctx, db, spec.Engine, spec, schema)
+		if err != nil {
+			return nil, err
+		}
+		query = "select owner, object_name, object_type from all_objects where owner = " + bind(spec, 1) + " and object_type in ('TABLE', 'VIEW') order by object_name"
+		if spec.Engine == "sqlserver" {
+			query = "select table_schema, table_name, table_type from information_schema.tables where table_schema = " + bind(spec, 1) + " order by table_name"
+		}
 		args = append(args, schema)
 	case "sqlite":
 		query = "select 'main' as table_schema, name as table_name, type as table_type from sqlite_master where type in ('table','view') and name not like 'sqlite_%' order by name"
@@ -405,10 +468,10 @@ func DescribeTable(ctx context.Context, spec conn.Spec, schema, table string) (T
 			schema = "public"
 		}
 		info.Schema = schema
-		query = `select column_name, data_type, is_nullable = 'YES', coalesce(column_default, '')
+		query = fmt.Sprintf(`select column_name, data_type, is_nullable = 'YES', coalesce(column_default, '')
 			from information_schema.columns
-			where table_schema = $1 and table_name = $2
-			order by ordinal_position`
+			where table_schema = %s and table_name = %s
+			order by ordinal_position`, bind(spec, 1), bind(spec, 2))
 		args = []any{schema, table}
 	case "mysql":
 		if schema == "" {
@@ -420,6 +483,12 @@ func DescribeTable(ctx context.Context, spec conn.Spec, schema, table string) (T
 			where table_schema = ? and table_name = ?
 			order by ordinal_position`
 		args = []any{schema, table}
+	case "oracle":
+		return describeTableOracle(ctx, db, spec, schema, table)
+	case "dm":
+		return describeTableDM(ctx, db, spec, schema, table)
+	case "sqlserver":
+		return describeTableSQLServer(ctx, db, spec, schema, table)
 	case "sqlite":
 		info.Schema = "main"
 		query = fmt.Sprintf("pragma table_info(%s)", quoteIdent(spec.Engine, table))
@@ -483,6 +552,12 @@ func ListRelations(ctx context.Context, spec conn.Spec, schema string) ([]Relati
 		return listRelationsMySQL(ctx, spec, schema)
 	case "sqlite":
 		return listRelationsSQLite(ctx, spec)
+	case "oracle":
+		return listRelationsOracle(ctx, spec, schema)
+	case "dm":
+		return listRelationsDM(ctx, spec, schema)
+	case "sqlserver":
+		return listRelationsSQLServer(ctx, spec, schema)
 	default:
 		return nil, fmt.Errorf("unsupported engine %s", spec.Engine)
 	}
@@ -510,7 +585,7 @@ func loadConstraintsPostgres(ctx context.Context, spec conn.Spec, schema, table 
 	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
 
-	query := `select tc.constraint_name, tc.constraint_type, kcu.column_name,
+	query := fmt.Sprintf(`select tc.constraint_name, tc.constraint_type, kcu.column_name,
 		coalesce(ccu.table_schema, ''), coalesce(ccu.table_name, ''), coalesce(ccu.column_name, '')
 		from information_schema.table_constraints tc
 		left join information_schema.key_column_usage kcu
@@ -520,9 +595,9 @@ func loadConstraintsPostgres(ctx context.Context, spec conn.Spec, schema, table 
 		left join information_schema.constraint_column_usage ccu
 		  on tc.constraint_name = ccu.constraint_name
 		 and tc.table_schema = ccu.table_schema
-		where tc.table_schema = $1 and tc.table_name = $2
+		where tc.table_schema = %s and tc.table_name = %s
 		  and tc.constraint_type in ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')
-		order by tc.constraint_name, kcu.ordinal_position`
+		order by tc.constraint_name, kcu.ordinal_position`, bind(spec, 1), bind(spec, 2))
 	rows, err := db.QueryContext(ctx, query, schema, table)
 	if err != nil {
 		return nil, nil, nil, err
@@ -720,15 +795,15 @@ func listRelationsPostgres(ctx context.Context, spec conn.Spec, schema string) (
 	if schema == "" {
 		schema = "public"
 	}
-	query := `select tc.constraint_name, tc.table_schema, tc.table_name, kcu.column_name,
+	query := fmt.Sprintf(`select tc.constraint_name, tc.table_schema, tc.table_name, kcu.column_name,
 		ccu.table_schema, ccu.table_name, ccu.column_name
 		from information_schema.table_constraints tc
 		join information_schema.key_column_usage kcu
 		  on tc.constraint_name = kcu.constraint_name and tc.table_schema = kcu.table_schema
 		join information_schema.constraint_column_usage ccu
 		  on tc.constraint_name = ccu.constraint_name and tc.table_schema = ccu.table_schema
-		where tc.constraint_type = 'FOREIGN KEY' and tc.table_schema = $1
-		order by tc.constraint_name, kcu.ordinal_position`
+		where tc.constraint_type = 'FOREIGN KEY' and tc.table_schema = %s
+		order by tc.constraint_name, kcu.ordinal_position`, bind(spec, 1))
 	rows, err := db.QueryContext(ctx, query, schema)
 	if err != nil {
 		return nil, err
@@ -896,10 +971,14 @@ func ImportRows(ctx context.Context, spec conn.Spec, table string, columns []str
 
 	placeholders := make([]string, 0, len(columns))
 	for i := range columns {
-		placeholders = append(placeholders, bind(spec.Engine, i+1))
+		placeholders = append(placeholders, bind(spec, i+1))
+	}
+	quotedTable, err := QuoteTable(spec.Engine, table)
+	if err != nil {
+		return 0, err
 	}
 	stmt := fmt.Sprintf("insert into %s (%s) values (%s)",
-		quoteIdent(spec.Engine, table),
+		quotedTable,
 		strings.Join(quoteAll(spec.Engine, columns), ", "),
 		strings.Join(placeholders, ", "),
 	)
@@ -935,11 +1014,32 @@ func normalizeValue(v any) any {
 	}
 }
 
-func bind(engine string, n int) string {
-	if engine == "postgres" {
+func bind(spec conn.Spec, n int) string {
+	if spec.Driver == "odbc" {
+		return "?"
+	}
+	switch spec.Engine {
+	case "postgres":
 		return fmt.Sprintf("$%d", n)
+	case "oracle":
+		return fmt.Sprintf(":%d", n)
+	case "sqlserver":
+		return fmt.Sprintf("@p%d", n)
 	}
 	return "?"
+}
+
+// QuoteTable quotes a plain table name or dot-separated qualified name.
+// Each component is treated as a literal identifier, not a SQL fragment.
+func QuoteTable(engine, table string) (string, error) {
+	parts := strings.Split(table, ".")
+	for i, part := range parts {
+		if part == "" || strings.ContainsRune(part, '\x00') {
+			return "", fmt.Errorf("table identifier components must be non-empty and contain no NUL")
+		}
+		parts[i] = quoteIdent(engine, part)
+	}
+	return strings.Join(parts, "."), nil
 }
 
 func quoteAll(engine string, names []string) []string {
@@ -955,7 +1055,418 @@ func quoteIdent(engine, ident string) string {
 	switch engine {
 	case "mysql":
 		return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+	case "sqlserver":
+		return "[" + strings.ReplaceAll(ident, "]", "]]") + "]"
 	default:
 		return `"` + escaped + `"`
 	}
+}
+
+func vendorCurrentSchema(ctx context.Context, db *sql.DB, engine string, config conn.Spec, schema string) (string, error) {
+	if schema != "" {
+		return schema, nil
+	}
+	if config.Schema != "" {
+		return config.Schema, nil
+	}
+	query := "select SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') from dual"
+	if engine == "sqlserver" {
+		query = "select SCHEMA_NAME()"
+	}
+	var current sql.NullString
+	if err := db.QueryRowContext(ctx, query).Scan(&current); err != nil {
+		return "", err
+	}
+	if !current.Valid || current.String == "" {
+		return "", fmt.Errorf("cannot determine current schema for %s; configure schema explicitly", engine)
+	}
+	return current.String, nil
+}
+
+func describeTableOracle(ctx context.Context, db *sql.DB, spec conn.Spec, schema, table string) (TableInfo, error) {
+	schema, err := vendorCurrentSchema(ctx, db, "oracle", spec, schema)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	query := "select column_name, data_type, nullable, data_default from all_tab_columns where owner = " + bind(spec, 1) + " and table_name = " + bind(spec, 2) + " order by column_id"
+	rows, err := db.QueryContext(ctx, query, schema, table)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	info := TableInfo{Schema: schema, Name: table}
+	for rows.Next() {
+		var column Column
+		var nullable string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column.Name, &column.Type, &nullable, &defaultValue); err != nil {
+			rows.Close()
+			return TableInfo{}, err
+		}
+		column.Nullable = nullable == "Y" || nullable == "YES"
+		column.DefaultValue = defaultValue.String
+		info.Columns = append(info.Columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return TableInfo{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return TableInfo{}, err
+	}
+	if len(info.Columns) == 0 {
+		return TableInfo{}, fmt.Errorf("table %s.%s does not exist or its metadata is not accessible", schema, table)
+	}
+	if err := vendorLoadConstraints(ctx, db, "oracle", spec, &info); err != nil {
+		return TableInfo{}, err
+	}
+	for index := range info.Columns {
+		for _, key := range info.PrimaryKey {
+			if info.Columns[index].Name == key {
+				info.Columns[index].PrimaryKey = true
+			}
+		}
+	}
+	return info, nil
+}
+
+func describeTableDM(ctx context.Context, db *sql.DB, spec conn.Spec, schema, table string) (TableInfo, error) {
+	schema, err := vendorCurrentSchema(ctx, db, "dm", spec, schema)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	query := "select column_name, data_type, nullable, data_default from all_tab_columns where owner = " + bind(spec, 1) + " and table_name = " + bind(spec, 2) + " order by column_id"
+	rows, err := db.QueryContext(ctx, query, schema, table)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	info := TableInfo{Schema: schema, Name: table}
+	for rows.Next() {
+		var column Column
+		var nullable string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column.Name, &column.Type, &nullable, &defaultValue); err != nil {
+			rows.Close()
+			return TableInfo{}, err
+		}
+		column.Nullable = nullable == "Y" || nullable == "YES"
+		column.DefaultValue = defaultValue.String
+		info.Columns = append(info.Columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return TableInfo{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return TableInfo{}, err
+	}
+	if len(info.Columns) == 0 {
+		return TableInfo{}, fmt.Errorf("table %s.%s does not exist or its metadata is not accessible", schema, table)
+	}
+	if err := vendorLoadConstraints(ctx, db, "dm", spec, &info); err != nil {
+		return TableInfo{}, err
+	}
+	for index := range info.Columns {
+		for _, key := range info.PrimaryKey {
+			if info.Columns[index].Name == key {
+				info.Columns[index].PrimaryKey = true
+			}
+		}
+	}
+	return info, nil
+}
+
+func describeTableSQLServer(ctx context.Context, db *sql.DB, spec conn.Spec, schema, table string) (TableInfo, error) {
+	schema, err := vendorCurrentSchema(ctx, db, "sqlserver", spec, schema)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	query := `select c.name, ty.name, case when c.is_nullable = 1 then 'Y' else 'N' end, d.definition
+from sys.columns c join sys.objects o on o.object_id = c.object_id
+join sys.schemas s on s.schema_id = o.schema_id
+join sys.types ty on ty.user_type_id = c.user_type_id
+left join sys.default_constraints d on d.object_id = c.default_object_id
+where s.name = %s and o.name = %s and o.type in ('U', 'V') order by c.column_id`
+	query = fmt.Sprintf(query, bind(spec, 1), bind(spec, 2))
+	rows, err := db.QueryContext(ctx, query, schema, table)
+	if err != nil {
+		return TableInfo{}, err
+	}
+	info := TableInfo{Schema: schema, Name: table}
+	for rows.Next() {
+		var column Column
+		var nullable string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&column.Name, &column.Type, &nullable, &defaultValue); err != nil {
+			rows.Close()
+			return TableInfo{}, err
+		}
+		column.Nullable = nullable == "Y" || nullable == "YES"
+		column.DefaultValue = defaultValue.String
+		info.Columns = append(info.Columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return TableInfo{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return TableInfo{}, err
+	}
+	if len(info.Columns) == 0 {
+		return TableInfo{}, fmt.Errorf("table %s.%s does not exist or its metadata is not accessible", schema, table)
+	}
+	if err := vendorLoadConstraints(ctx, db, "sqlserver", spec, &info); err != nil {
+		return TableInfo{}, err
+	}
+	for index := range info.Columns {
+		for _, key := range info.PrimaryKey {
+			if info.Columns[index].Name == key {
+				info.Columns[index].PrimaryKey = true
+			}
+		}
+	}
+	return info, nil
+}
+
+const oracleConstraintJoins = ` from all_constraints c
+join all_cons_columns cc on cc.owner = c.owner and cc.constraint_name = c.constraint_name and cc.table_name = c.table_name
+left join all_constraints rc on rc.owner = c.r_owner and rc.constraint_name = c.r_constraint_name
+left join all_cons_columns rcc on rcc.owner = rc.owner and rcc.constraint_name = rc.constraint_name and rcc.table_name = rc.table_name and rcc.position = cc.position`
+
+func vendorLoadConstraints(ctx context.Context, db *sql.DB, engine string, config conn.Spec, info *TableInfo) error {
+	query := `select c.constraint_name, c.constraint_type, cc.column_name, rc.owner, rc.table_name, rcc.column_name` + oracleConstraintJoins +
+		" where c.owner = " + bind(config, 1) + " and c.table_name = " + bind(config, 2) + " and c.constraint_type in ('P','U','R') order by c.constraint_name, cc.position"
+	if engine == "sqlserver" {
+		query = `select constraint_name, constraint_type, column_name, ref_schema, ref_table, ref_column from (
+select k.name constraint_name, case when k.type = 'PK' then 'P' else 'U' end constraint_type,
+col.name column_name, cast(null as nvarchar(128)) ref_schema, cast(null as nvarchar(128)) ref_table,
+cast(null as nvarchar(128)) ref_column, ic.key_ordinal ordinal
+from sys.key_constraints k join sys.tables t on t.object_id = k.parent_object_id
+join sys.schemas s on s.schema_id = t.schema_id
+join sys.index_columns ic on ic.object_id = t.object_id and ic.index_id = k.unique_index_id
+join sys.columns col on col.object_id = t.object_id and col.column_id = ic.column_id
+where s.name = %s and t.name = %s and ic.key_ordinal > 0
+union all
+select fk.name, 'R', col.name, rs.name, rt.name, rcol.name, fkc.constraint_column_id
+from sys.foreign_keys fk join sys.tables t on t.object_id = fk.parent_object_id
+join sys.schemas s on s.schema_id = t.schema_id
+join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
+join sys.columns col on col.object_id = t.object_id and col.column_id = fkc.parent_column_id
+left join sys.tables rt on rt.object_id = fkc.referenced_object_id
+left join sys.schemas rs on rs.schema_id = rt.schema_id
+left join sys.columns rcol on rcol.object_id = fkc.referenced_object_id and rcol.column_id = fkc.referenced_column_id
+where s.name = %s and t.name = %s) keys_metadata order by constraint_name, ordinal`
+		query = fmt.Sprintf(query, bind(config, 1), bind(config, 2), bind(config, 3), bind(config, 4))
+	}
+	args := []any{info.Schema, info.Name}
+	if engine == "sqlserver" {
+		args = append(args, info.Schema, info.Name)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	unique := map[string][]string{}
+	foreign := map[string]*ForeignKey{}
+	for rows.Next() {
+		var name, kind, column string
+		var refSchema, refTable, refColumn sql.NullString
+		if err := rows.Scan(&name, &kind, &column, &refSchema, &refTable, &refColumn); err != nil {
+			return err
+		}
+		switch kind {
+		case "P":
+			info.PrimaryKey = append(info.PrimaryKey, column)
+		case "U":
+			unique[name] = append(unique[name], column)
+		case "R":
+			if !refSchema.Valid || !refTable.Valid || !refColumn.Valid {
+				return fmt.Errorf("referenced metadata for foreign key %s is not accessible", name)
+			}
+			key := foreign[name]
+			if key == nil {
+				key = &ForeignKey{Name: name, RefSchema: refSchema.String, RefTable: refTable.String}
+				foreign[name] = key
+			}
+			key.Columns = append(key.Columns, column)
+			key.RefColumns = append(key.RefColumns, refColumn.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	info.UniqueKeys = constraintsFromMap(unique)
+	sort.Slice(info.UniqueKeys, func(i, j int) bool { return info.UniqueKeys[i].Name < info.UniqueKeys[j].Name })
+	info.ForeignKeys = foreignKeysFromMap(foreign)
+	sort.Slice(info.ForeignKeys, func(i, j int) bool { return info.ForeignKeys[i].Name < info.ForeignKeys[j].Name })
+	return nil
+}
+
+func listRelationsOracle(ctx context.Context, spec conn.Spec, schema string) ([]RelationInfo, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+	if schema == "" {
+		schema = spec.Schema
+	}
+	if schema == "" {
+		var current sql.NullString
+		if err := db.QueryRowContext(ctx, "select SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') from dual").Scan(&current); err != nil {
+			return nil, err
+		}
+		if !current.Valid || current.String == "" {
+			return nil, fmt.Errorf("cannot determine current schema for %s; configure schema explicitly", spec.Engine)
+		}
+		schema = current.String
+	}
+	query := `select c.constraint_name, c.owner, c.table_name, cc.column_name, rc.owner, rc.table_name, rcc.column_name from all_constraints c
+join all_cons_columns cc on cc.owner = c.owner and cc.constraint_name = c.constraint_name and cc.table_name = c.table_name
+left join all_constraints rc on rc.owner = c.r_owner and rc.constraint_name = c.r_constraint_name
+left join all_cons_columns rcc on rcc.owner = rc.owner and rcc.constraint_name = rc.constraint_name and rcc.table_name = rc.table_name and rcc.position = cc.position` +
+		" where c.owner = " + bind(spec, 1) + " and c.constraint_type = 'R' order by c.table_name, c.constraint_name, cc.position"
+	rows, err := db.QueryContext(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var relations []RelationInfo
+	indices := map[[3]string]int{}
+	for rows.Next() {
+		var name, fromSchema, fromTable, fromColumn string
+		var toSchema, toTable, toColumn sql.NullString
+		if err := rows.Scan(&name, &fromSchema, &fromTable, &fromColumn, &toSchema, &toTable, &toColumn); err != nil {
+			return nil, err
+		}
+		if !toSchema.Valid || !toTable.Valid || !toColumn.Valid {
+			return nil, fmt.Errorf("referenced metadata for foreign key %s.%s.%s is not accessible", fromSchema, fromTable, name)
+		}
+		key := [3]string{fromSchema, fromTable, name}
+		index, ok := indices[key]
+		if !ok {
+			index = len(relations)
+			indices[key] = index
+			relations = append(relations, RelationInfo{Name: name, FromSchema: fromSchema, FromTable: fromTable, ToSchema: toSchema.String, ToTable: toTable.String})
+		}
+		relations[index].FromCols = append(relations[index].FromCols, fromColumn)
+		relations[index].ToCols = append(relations[index].ToCols, toColumn.String)
+	}
+	return relations, rows.Err()
+}
+
+func listRelationsDM(ctx context.Context, spec conn.Spec, schema string) ([]RelationInfo, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+	if schema == "" {
+		schema = spec.Schema
+	}
+	if schema == "" {
+		var current sql.NullString
+		if err := db.QueryRowContext(ctx, "select SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') from dual").Scan(&current); err != nil {
+			return nil, err
+		}
+		if !current.Valid || current.String == "" {
+			return nil, fmt.Errorf("cannot determine current schema for %s; configure schema explicitly", spec.Engine)
+		}
+		schema = current.String
+	}
+	query := `select c.constraint_name, c.owner, c.table_name, cc.column_name, rc.owner, rc.table_name, rcc.column_name from all_constraints c
+join all_cons_columns cc on cc.owner = c.owner and cc.constraint_name = c.constraint_name and cc.table_name = c.table_name
+left join all_constraints rc on rc.owner = c.r_owner and rc.constraint_name = c.r_constraint_name
+left join all_cons_columns rcc on rcc.owner = rc.owner and rcc.constraint_name = rc.constraint_name and rcc.table_name = rc.table_name and rcc.position = cc.position` +
+		" where c.owner = " + bind(spec, 1) + " and c.constraint_type = 'R' order by c.table_name, c.constraint_name, cc.position"
+	rows, err := db.QueryContext(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var relations []RelationInfo
+	indices := map[[3]string]int{}
+	for rows.Next() {
+		var name, fromSchema, fromTable, fromColumn string
+		var toSchema, toTable, toColumn sql.NullString
+		if err := rows.Scan(&name, &fromSchema, &fromTable, &fromColumn, &toSchema, &toTable, &toColumn); err != nil {
+			return nil, err
+		}
+		if !toSchema.Valid || !toTable.Valid || !toColumn.Valid {
+			return nil, fmt.Errorf("referenced metadata for foreign key %s.%s.%s is not accessible", fromSchema, fromTable, name)
+		}
+		key := [3]string{fromSchema, fromTable, name}
+		index, ok := indices[key]
+		if !ok {
+			index = len(relations)
+			indices[key] = index
+			relations = append(relations, RelationInfo{Name: name, FromSchema: fromSchema, FromTable: fromTable, ToSchema: toSchema.String, ToTable: toTable.String})
+		}
+		relations[index].FromCols = append(relations[index].FromCols, fromColumn)
+		relations[index].ToCols = append(relations[index].ToCols, toColumn.String)
+	}
+	return relations, rows.Err()
+}
+
+func listRelationsSQLServer(ctx context.Context, spec conn.Spec, schema string) ([]RelationInfo, error) {
+	db, err := Open(spec)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(ctx, spec.Timeout)
+	defer cancel()
+	if schema == "" {
+		schema = spec.Schema
+	}
+	if schema == "" {
+		var current sql.NullString
+		if err := db.QueryRowContext(ctx, "select SCHEMA_NAME()").Scan(&current); err != nil {
+			return nil, err
+		}
+		if !current.Valid || current.String == "" {
+			return nil, fmt.Errorf("cannot determine current schema for %s; configure schema explicitly", spec.Engine)
+		}
+		schema = current.String
+	}
+	query := fmt.Sprintf(`select fk.name, s.name, t.name, col.name, rs.name, rt.name, rcol.name
+from sys.foreign_keys fk join sys.tables t on t.object_id = fk.parent_object_id
+join sys.schemas s on s.schema_id = t.schema_id
+join sys.foreign_key_columns fkc on fkc.constraint_object_id = fk.object_id
+join sys.columns col on col.object_id = t.object_id and col.column_id = fkc.parent_column_id
+left join sys.tables rt on rt.object_id = fkc.referenced_object_id
+left join sys.schemas rs on rs.schema_id = rt.schema_id
+left join sys.columns rcol on rcol.object_id = fkc.referenced_object_id and rcol.column_id = fkc.referenced_column_id
+where s.name = %s order by t.name, fk.name, fkc.constraint_column_id`, bind(spec, 1))
+	rows, err := db.QueryContext(ctx, query, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var relations []RelationInfo
+	indices := map[[3]string]int{}
+	for rows.Next() {
+		var name, fromSchema, fromTable, fromColumn string
+		var toSchema, toTable, toColumn sql.NullString
+		if err := rows.Scan(&name, &fromSchema, &fromTable, &fromColumn, &toSchema, &toTable, &toColumn); err != nil {
+			return nil, err
+		}
+		if !toSchema.Valid || !toTable.Valid || !toColumn.Valid {
+			return nil, fmt.Errorf("referenced metadata for foreign key %s.%s.%s is not accessible", fromSchema, fromTable, name)
+		}
+		key := [3]string{fromSchema, fromTable, name}
+		index, ok := indices[key]
+		if !ok {
+			index = len(relations)
+			indices[key] = index
+			relations = append(relations, RelationInfo{Name: name, FromSchema: fromSchema, FromTable: fromTable, ToSchema: toSchema.String, ToTable: toTable.String})
+		}
+		relations[index].FromCols = append(relations[index].FromCols, fromColumn)
+		relations[index].ToCols = append(relations[index].ToCols, toColumn.String)
+	}
+	return relations, rows.Err()
 }

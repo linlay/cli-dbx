@@ -19,6 +19,7 @@ import (
 	"github.com/linlay/cli-dbx/internal/config"
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
+	"github.com/linlay/cli-dbx/internal/odbcdriver"
 	"github.com/linlay/cli-dbx/internal/output"
 	"github.com/linlay/cli-dbx/internal/secret"
 	"github.com/linlay/cli-dbx/internal/sqlanalyzer"
@@ -585,7 +586,11 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if err := enforceTablePolicy(spec, []string{table}); err != nil {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
-	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
+	quotedTable, err := db.QuoteTable(spec.Engine, table)
+	if err != nil {
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
+	}
+	query := fmt.Sprintf("select * from %s", quotedTable)
 	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
@@ -953,16 +958,15 @@ func orderedKeys(rows []map[string]any) []string {
 	return keys
 }
 
-func quoteExportTable(engine, table string) string {
-	switch engine {
-	case "mysql":
-		return "`" + strings.ReplaceAll(table, "`", "``") + "`"
-	default:
-		return `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
-	}
-}
-
 func redactDSN(spec conn.Spec) string {
+	if spec.Driver == "odbc" {
+		return "[redacted]"
+	}
+	switch spec.Engine {
+	case "oracle", "dm", "sqlserver":
+		// DSNs can carry credentials in properties as well as userinfo.
+		return "[redacted]"
+	}
 	if spec.Engine == "sqlite" {
 		return spec.DSN
 	}
@@ -1032,7 +1036,13 @@ func nextForClass(class sqlclass.StatementClass, more bool) string {
 }
 
 func classifyErrorCode(err error) string {
+	var missing *odbcdriver.MissingError
+	if errors.As(err, &missing) {
+		return "driver_missing"
+	}
 	switch {
+	case errors.Is(err, odbcdriver.ErrUnavailable):
+		return "odbc_unavailable"
 	case errors.Is(err, secret.ErrSecretStoreUnavailable):
 		return "secret_store_unavailable"
 	case errors.Is(err, secret.ErrSecretKeyNotFound):
@@ -1103,6 +1113,10 @@ func hintForCode(code string) string {
 		return "Run dbx secret encrypt on this machine and replace the encrypted password in the connection file."
 	case "encrypted_password_invalid":
 		return "Replace the encrypted password with a fresh value from dbx secret encrypt."
+	case "driver_missing":
+		return "Install the vendor ODBC driver externally and configure driver_dir/DBX_DRIVER_DIR; DBX does not install drivers."
+	case "odbc_unavailable":
+		return "Use a DBX release with ODBC support for your operating system and architecture. Installing a vendor driver alone does not enable ODBC."
 	default:
 		return "Check the SQL text, target connection, or input file."
 	}
@@ -1126,6 +1140,8 @@ func nextForCode(code string) string {
 		return "configure_secret_store"
 	case "secret_key_not_found", "encrypted_password_invalid":
 		return "secret_encrypt"
+	case "driver_missing", "odbc_unavailable":
+		return "provide_driver"
 	default:
 		return "refine_sql"
 	}
@@ -1163,6 +1179,10 @@ func summaryForError(code string) string {
 		return "encrypted password key is unavailable on this machine"
 	case "encrypted_password_invalid":
 		return "encrypted password is invalid"
+	case "driver_missing":
+		return "required vendor ODBC driver was not found"
+	case "odbc_unavailable":
+		return "ODBC support is not enabled in this build"
 	default:
 		return "database command failed"
 	}
@@ -1183,6 +1203,15 @@ func (a *App) renderError(format string, verbose bool, spec conn.Spec, act actio
 		Summary:        summaryForError(code),
 		Verbose:        verbose,
 	}
+	var missing *odbcdriver.MissingError
+	if errors.As(err, &missing) {
+		env.Engine = missing.Engine
+		env.Data = map[string]any{
+			"engine":         missing.Engine,
+			"driver_dir":     missing.DriverDir,
+			"market_package": missing.MarketPackage,
+		}
+	}
 	if err != nil {
 		env.Warnings = []string{sanitizeError(err, spec)}
 	}
@@ -1198,8 +1227,15 @@ func sanitizeError(err error, spec conn.Spec) string {
 		return ""
 	}
 	message := err.Error()
+	if spec.Driver == "odbc" {
+		return "ODBC operation failed (connection error details redacted)"
+	}
 	if spec.DSN == "" || spec.Engine == "sqlite" {
 		return message
+	}
+	if spec.Engine == "sqlserver" && !strings.HasPrefix(strings.ToLower(spec.DSN), "sqlserver://") {
+		// ADO/ODBC credential quoting requires a vendor parser; keep it out of DBX.
+		return "database operation failed (connection error details redacted)"
 	}
 	message = strings.ReplaceAll(message, spec.DSN, redactDSN(spec))
 	if password := passwordFromDSN(spec.Engine, spec.DSN); password != "" {
@@ -1211,11 +1247,20 @@ func sanitizeError(err error, spec conn.Spec) string {
 
 func passwordFromDSN(engine, dsn string) string {
 	switch engine {
-	case "postgres":
+	case "postgres", "oracle", "sqlserver":
 		parsed, err := url.Parse(dsn)
-		if err == nil && parsed.User != nil {
-			password, _ := parsed.User.Password()
-			return password
+		if err == nil {
+			if engine == "sqlserver" {
+				for key, values := range parsed.Query() {
+					if strings.EqualFold(key, "password") && len(values) > 0 {
+						return values[0]
+					}
+				}
+			}
+			if parsed.User != nil {
+				password, _ := parsed.User.Password()
+				return password
+			}
 		}
 	case "mysql":
 		if at := strings.LastIndex(dsn, "@"); at > 0 {
@@ -1223,8 +1268,38 @@ func passwordFromDSN(engine, dsn string) string {
 				return dsn[colon+1 : at]
 			}
 		}
+	case "dm":
+		// DM credentials are literal, not URL-decoded.
+		if q := strings.LastIndex(dsn, "?"); q >= 0 {
+			for _, field := range strings.Split(dsn[q+1:], "&") {
+				key, value, ok := strings.Cut(field, "=")
+				if ok && strings.EqualFold(key, "password") {
+					return value
+				}
+			}
+			dsn = dsn[:q]
+		}
+		if start, end, ok := rawPasswordBounds(dsn); ok {
+			return dsn[start:end]
+		}
 	}
 	return ""
+}
+
+func rawPasswordBounds(dsn string) (int, int, bool) {
+	end := strings.LastIndex(dsn, "@")
+	if end <= 0 {
+		return 0, 0, false
+	}
+	authStart := 0
+	if scheme := strings.Index(dsn[:end], "://"); scheme >= 0 {
+		authStart = scheme + 3
+	}
+	colon := strings.Index(dsn[authStart:end], ":")
+	if colon < 0 {
+		return 0, 0, false
+	}
+	return authStart + colon + 1, end, true
 }
 
 func printEnvelopeWithWarnings(format string, spec conn.Spec, env output.Envelope) error {

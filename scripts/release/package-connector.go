@@ -112,6 +112,37 @@ func build(root, binary, goos, arch string) error {
 		return err
 	}
 	files["bin/"+exe] = b
+	if goos == "darwin" {
+		for _, dir := range []string{"lib", "licenses"} {
+			base := filepath.Join(filepath.Dir(binary), dir)
+			err = filepath.WalkDir(base, func(p string, d fs.DirEntry, e error) error {
+				if e != nil || d.IsDir() {
+					return e
+				}
+				if !d.Type().IsRegular() {
+					return fmt.Errorf("non-regular runtime resource: %s", p)
+				}
+				rel, e := filepath.Rel(base, p)
+				if e != nil {
+					return e
+				}
+				key := filepath.ToSlash(filepath.Join(dir, rel))
+				if dir == "lib" {
+					key = "bin/" + key
+				}
+				files[key], e = os.ReadFile(p)
+				return e
+			})
+			if err != nil {
+				return fmt.Errorf("macOS ODBC runtime: %w", err)
+			}
+		}
+		for _, required := range []string{"bin/lib/libodbc.2.dylib", "bin/lib/libodbcinst.2.dylib", "bin/lib/libodbccr.2.dylib", "bin/lib/libltdl.7.dylib", "licenses/unixODBC/COPYING", "licenses/libltdl/COPYING.LIB"} {
+			if len(files[required]) == 0 {
+				return fmt.Errorf("missing macOS ODBC runtime resource: %s", required)
+			}
+		}
+	}
 	dist := filepath.Join(root, "dist", version)
 	if err = os.MkdirAll(dist, 0755); err != nil {
 		return err

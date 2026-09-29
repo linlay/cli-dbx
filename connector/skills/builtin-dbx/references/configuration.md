@@ -26,11 +26,14 @@ tags = ["dev"]
 
 ## Engine
 
-支持：
+`engine` 表示数据库类型或兼容方言，内置支持：
 
 - `postgres` / `postgresql`
 - `mysql`
 - `sqlite` / `sqlite3`
+- `oracle`
+- `dm` / `dameng`
+- `sqlserver` / `mssql`
 
 SQLite 示例：
 
@@ -44,9 +47,20 @@ allow_tables = ["users"]
 
 SQLite 相对 `path` 以配置文件目录为基准。
 
+Oracle 的 `database` 填服务名；Oracle、达梦的 `schema` 用于 inspect，不改变普通 SQL 的默认 schema，跨 schema 查询需显式写 `SCHEMA.TABLE`。
+
+## ODBC
+
+- `driver` 省略或为 `"native"` 时使用内置驱动；`driver = "odbc"` 使用厂商 ODBC 库，不因连接失败自动切换。
+- 其他数据库的 `engine` 填实际类型，并显式选择 `driver = "odbc"`。
+- 驱动目录优先级：`driver_dir` → `DBX_DRIVER_DIR` → `~/.config/dbx/drivers`。
+- `odbc_driver` 为目录内相对库路径；已知厂商可省略，存在多个版本或未知厂商需指定。
+- ODBC 连接属性通过 `odbc_options` 提供，凭据用 `user` / `password`。
+
 ## 当前字段
 
-- 连接：`engine`、`dsn`、`dsn_env`、`host`、`port`、`user`、`password`、`database`、`schema`、`path`、`sslmode`
+- 连接：`engine`、`driver`、`dsn`、`dsn_env`、`host`、`port`、`user`、`password`、`database`、`schema`、`path`、`sslmode`
+- ODBC：`driver_dir`、`odbc_driver`、`odbc_options`
 - 行为：`readonly`、`timeout`、`role`、`tags`
 - 权限：`allow_actions`、`allow_tables`
 

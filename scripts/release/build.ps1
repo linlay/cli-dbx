@@ -49,16 +49,19 @@ if (-not $includeLicense) {
 }
 
 $targets = @(
-    @{ OS = "darwin";  Arch = "amd64" },
-    @{ OS = "darwin";  Arch = "arm64" },
     @{ OS = "linux";   Arch = "amd64" },
     @{ OS = "linux";   Arch = "arm64" },
-    @{ OS = "windows"; Arch = "amd64" },
-    @{ OS = "windows"; Arch = "arm64" }
+    @{ OS = "windows"; Arch = "amd64" }
 )
+if ((& go env GOHOSTOS) -eq "darwin" -and (& go env GOHOSTARCH) -eq "arm64") {
+    $targets = @(@{ OS = "darwin"; Arch = "arm64" }) + $targets
+} else {
+    Write-Host "macOS unixODBC package must be built on Apple Silicon; building Linux/Windows only"
+}
 if ($TargetOS -or $TargetArch) {
     if (-not $TargetOS -or -not $TargetArch) { Write-Error "TargetOS and TargetArch must be provided together" }
-    $targets = @(@{ OS = $TargetOS; Arch = $TargetArch })
+    $targets = @($targets | Where-Object { $_.OS -eq $TargetOS -and $_.Arch -eq $TargetArch })
+    if ($targets.Count -eq 0) { throw "Unsupported target $TargetOS/$TargetArch" }
 }
 
 $archives = @()
@@ -89,8 +92,13 @@ foreach ($t in $targets) {
         $env:GOARCH = $goarch
         Push-Location $REPO_ROOT
         try {
-            & go build -trimpath -ldflags $ldflags -o (Join-Path $packageDir $binaryName) ./cmd/dbx
-            if ($LASTEXITCODE -ne 0) { Write-Error "go build failed for $goos/$goarch" }
+            if ($goos -eq "darwin") {
+                & bash (Join-Path $REPO_ROOT "scripts/release/build.sh") --macos-binary (Join-Path $packageDir $binaryName) $ldflags
+                if ($LASTEXITCODE -ne 0) { throw "macOS ODBC build failed" }
+            } else {
+                & go build -trimpath -ldflags $ldflags -o (Join-Path $packageDir $binaryName) ./cmd/dbx
+                if ($LASTEXITCODE -ne 0) { Write-Error "go build failed for $goos/$goarch" }
+            }
         } finally {
             Pop-Location
         }
@@ -105,6 +113,8 @@ foreach ($t in $targets) {
     $archives += "builtin.dbx_${version}_${goos}_${goarch}.zip"
 
     Copy-Item (Join-Path $REPO_ROOT "README.md") (Join-Path $packageDir "README.md")
+    New-Item -ItemType Directory -Path (Join-Path $packageDir "examples") -Force | Out-Null
+    Copy-Item (Join-Path $REPO_ROOT "examples/config.*.toml") (Join-Path $packageDir "examples")
     if ($includeLicense) {
         Copy-Item (Join-Path $REPO_ROOT "LICENSE") (Join-Path $packageDir "LICENSE")
     }

@@ -2,7 +2,7 @@
 
 ## 1. 项目简介
 
-`dbx` 是一个给人类和智能体都能用的 database CLI。它面向 MySQL、PostgreSQL、SQLite，重点解决三件事：
+`dbx` 是一个给人类和智能体都能用的 database CLI。MySQL、PostgreSQL、SQLite、SQL Server、Oracle、达梦驱动内置；兼容数据库按 TOML 的 `engine` 选择接入协议。其他数据库或需要替代原生驱动时，显式使用 ODBC。
 
 - 用统一方式管理数据库连接
 - 用显式命令执行查询、更新、DDL 和导入导出
@@ -14,7 +14,7 @@
 
 ### 前置要求
 
-- Go 1.22+，或直接下载 Release 二进制
+- Go 1.26.6+，或直接下载 Release 二进制
 - 本地可访问的 PostgreSQL / MySQL / SQLite
 
 ### 本地编译
@@ -132,6 +132,56 @@ password = "dbx-aes-gcm:v2:..."
 allow_actions = ["query"]
 ```
 
+### 内置与 ODBC 驱动
+
+默认内置 MySQL、PostgreSQL、SQLite、SQL Server、Oracle、达梦，无需额外安装数据库客户端。SQL Server 使用微软 `go-mssqldb`，Oracle 使用官方 `go-oracledb/v26 v26.0.1-beta`，达梦使用社区维护的 `gitee.com/chunanyong/dm`。
+
+Oracle 官方支持范围为 19c+，DBX 不主动拦截旧版本，但不保证旧版本兼容。Oracle 使用 `database` 指定服务名；Oracle、达梦的 `schema` 用于 inspect，业务 SQL 显式限定 schema。三个新增内置引擎均使用结构化连接字段。
+
+`driver` 省略或为 `"native"` 时使用内置驱动；设为 `"odbc"` 时使用外部厂商库。不根据连接失败自动切换。已有 ODBC 配置需明确加上 `driver = "odbc"`。DBX 不下载或安装驱动。
+
+通过环境变量 `DBX_DRIVER_DIR` 指定驱动目录，也可在连接配置中设置 `driver_dir` 覆盖它；未设置时沿用 `~/.config/dbx/drivers`。目录中的厂商文件不需要改名。
+
+```toml
+[connection]
+engine = "sqlserver"
+driver = "odbc"
+driver_dir = "/path/to/vendor/lib"
+odbc_driver = "libmsodbcsql.18.dylib" # 可省略；存在多个版本时必须明确选择
+host = "127.0.0.1"
+port = 1433
+user = "app"
+database = "appdb"
+password = "dbx-aes-gcm:v2:..."
+allow_actions = ["query"]
+
+[connection.odbc_options]
+Encrypt = "yes"
+```
+
+`odbc_driver` 是目录内的相对文件路径，可以包含厂商包的子目录。未设置时仅查找目录第一层的厂商常见文件名；不会递归扫描其他目录。`odbc_options` 允许额外厂商连接属性，不能覆盖驱动、凭据或已设置的结构化字段。ODBC 连接使用上述结构化配置，不接受 `dsn` / `dsn_env` / `--dsn` 绕过目录选择。
+
+```bash
+export DBX_DRIVER_DIR="/path/to/vendor/lib"
+dbx odbc dir
+dbx odbc list
+```
+
+Windows PowerShell 示例：
+
+```powershell
+$env:DBX_DRIVER_DIR = "C:\path\to\vendor\driver"
+dbx odbc list
+```
+
+`odbc dir/list` 查看环境变量对应目录，不读取某个连接的 `driver_dir`。列表只表示找到了候选库文件，连接时由 ODBC 检查能否加载。缺失时返回 `driver_missing`，包含 `engine`、`driver_dir` 和市场检索标识 `market_package`；后者不代表云端一定已经发布对应包。
+
+OceanBase、TDSQL 等兼容数据库由用户在 TOML 中选择实际协议：MySQL 兼容连接填写 `engine = "mysql"`，PostgreSQL 兼容连接填写 `engine = "postgres"`。DBX 不识别品牌、不推断模式；端口、用户名及数据库名按实际连接填写。模板只是配置示例，不代表所有数据库版本都已验证。
+
+`engine` 填数据库类型或兼容方言，`driver` 选择接入方式。其他数据库填写实际类型，显式配置 `driver = "odbc"`、`odbc_driver`，并在 `odbc_options` 填写厂商要求的连接属性；凭据仍使用 `user` / `password`。未知厂商文件名必须指定 `odbc_driver`，`odbc list` 仍只自动识别已知厂商。
+
+**macOS M 系列发布包已包含 unixODBC 运行库；Windows x64 使用系统 ODBC 管理器。** 用户无需额外安装驱动管理器，厂商数据库驱动仍按需安装。Linux ODBC 的依赖及自定义构建方式见 [ODBC 构建与安装说明](docs/odbc.md)。
+
 交互生成加密密码（推荐给人类使用）：
 
 ```bash
@@ -185,20 +235,42 @@ dbx secret encrypt
 
 如果你要理解 `allow_actions`、`allow_tables` 和为什么 `tx` 只允许 `query/update`，请看 [AGENTS.md](./AGENTS.md)。
 
-也可以直接参考：
+### 连接配置示例
 
-- [config.example.toml](./testdata/config.example.toml)
-- [config.sqlite.toml](./testdata/config.sqlite.toml)
+配置示例统一位于 `examples/`，源码仓库和独立 CLI 发布包使用相同目录。
+
+| 数据库 | 示例文件 |
+|---|---|
+| MySQL | [config.mysql.toml](./examples/config.mysql.toml) |
+| PostgreSQL | [config.postgres.toml](./examples/config.postgres.toml) |
+| SQLite | [config.sqlite.toml](./examples/config.sqlite.toml) |
+| 达梦 | [config.dm.toml](./examples/config.dm.toml) |
+| Oracle | [config.oracle.toml](./examples/config.oracle.toml) |
+| SQL Server | [config.sqlserver.toml](./examples/config.sqlserver.toml) |
+| 通用 ODBC | [config.odbc.toml](./examples/config.odbc.toml) |
+
+解压 CLI 包后，以 MySQL 为例：
+
+```bash
+mkdir -p connections
+cp examples/config.mysql.toml connections/mysql.toml
+# 编辑 connections/mysql.toml，填写实际地址、端口、账号和库名。
+./dbx secret encrypt >> connections/mysql.toml
+./dbx conn test --config ./connections mysql
+./dbx query --config ./connections mysql 'SELECT 1 AS ok'
+```
+
+加密命令交互读取密码并追加配置，仅在文件没有 `password` 字段时执行一次；后续修改密码应替换原字段。网络数据库示例不含真实密码，默认仅开放 `query`。
 
 ## 4. 发布与分发
 
 如果你是普通使用者，优先从 GitHub Releases 下载对应平台压缩包：
 
+Windows ARM64 和 macOS Intel 暂不纳入支持及发布范围。macOS 解压后须保留 `dbx` 旁的 `lib/` 和 `licenses/`，不要只复制可执行文件；最低 macOS 版本取决于发布时所用运行库。
+
 - macOS Apple Silicon：`dbx_vX.Y.Z_darwin_arm64.tar.gz`
-- macOS Intel：`dbx_vX.Y.Z_darwin_amd64.tar.gz`
 - Linux ARM64：`dbx_vX.Y.Z_linux_arm64.tar.gz`
 - Linux AMD64：`dbx_vX.Y.Z_linux_amd64.tar.gz`
-- Windows ARM64：`dbx_vX.Y.Z_windows_arm64.zip`
 - Windows AMD64：`dbx_vX.Y.Z_windows_amd64.zip`
 
 解压后可直接验证：
@@ -211,7 +283,7 @@ tar -xzf dbx_v0.1.0_darwin_arm64.tar.gz
 
 Windows 使用 `Expand-Archive` 或其他 zip 工具解压后运行 `dbx.exe version`。
 
-维护者打包时，正式版本由 Git 跟踪的仓库根目录 [`VERSION`](./VERSION) 统一管理；更新该文件后运行 `scripts/release/build.sh`，无需传入版本号。
+维护者打包时，正式版本由 Git 跟踪的仓库根目录 [`VERSION`](./VERSION) 统一管理。运行 `scripts/release/build.sh`。
 
 维护者的构建、打包、发布流程见 [AGENTS.md](./AGENTS.md)。
 
@@ -256,6 +328,7 @@ go test ./...
 - 旧 v1 密码解不开：确认输入的是加密时使用的 master passphrase
 - 密码来源被禁用：改用 `password = "dbx-aes-gcm:v2:..."`
 - SQLite 路径不对：相对路径是相对于配置文件目录，不是当前工作目录
+- `driver_missing`：按 `market_package` 查找厂商 ODBC 包，通过外部工具安装、校验，再设置 `driver_dir` 或 `DBX_DRIVER_DIR` 指向实际驱动目录；Windows 还需厂商安装器完成 ODBC 注册
 
 ## 6. 进一步阅读
 
@@ -263,9 +336,9 @@ go test ./...
   设计与开发约定
 - [Beginner Guide](./docs/beginner-guide.md)
   第一次上手
-- [config.example.toml](./testdata/config.example.toml)
+- [config.postgres.toml](./examples/config.postgres.toml)
   配置示例
-- [config.sqlite.toml](./testdata/config.sqlite.toml)
+- [config.sqlite.toml](./examples/config.sqlite.toml)
   SQLite 示例
 
 

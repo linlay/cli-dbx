@@ -44,6 +44,10 @@ dbx inspect connection <name>
 
 使用上页返回的 `next_cursor`，保持同一条 SQL 和相同的 `order by`。
 
+### ODBC 驱动获取
+
+出现 `driver_missing` 时，根据用户意图和错误中的 `engine`、`driver_dir`、`market_package`，分析报错，并提示用户。
+
 ### secret_store_unavailable / secret_key_not_found / encrypted_password_invalid
 
 确认操作系统凭据库可用；在当前机器和用户下重新运行 `dbx secret encrypt`，更新连接中的加密 `password`。不要读取或输出密钥、明文密码或完整 DSN。
@@ -63,7 +67,7 @@ dbx inspect connection <name>
 
 ## 排障顺序
 
-1. 重跑失败的单条 DBX 命令并读取错误 envelope。
+1. 先读取已有错误的 `code`、`hint`、`next`；写入结果不确定时先核实，不直接重跑。
 2. 用 `conn show/test` 和 `inspect connection/table` 验证连接与结构。
 3. 不确定语法时查看目标命令的 `--help`。
 4. 只有仍无法定位时，才检查非敏感配置字段或显式 `--config` 来源。

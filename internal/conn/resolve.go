@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,8 +14,8 @@ import (
 
 type Spec struct {
 	Name           string
-	Engine         string
-	Driver         string
+	Engine         string // Database type or compatible SQL dialect.
+	Driver         string // Resolved Go SQL driver name, never "native".
 	DSN            string
 	Host           string
 	Port           int
@@ -47,6 +46,10 @@ type ResolveInput struct {
 
 func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 	if in.DSN != "" {
+		if requiresStructuredFields(normalizeEngine(in.Engine)) || requiresStructuredFields(inferEngine(in.DSN)) {
+			return Spec{}, fmt.Errorf("this engine requires a named connection with structured fields")
+		}
+
 		engine := in.Engine
 		if engine == "" {
 			engine = inferEngine(in.DSN)
@@ -69,10 +72,21 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 	if err != nil {
 		return Spec{}, err
 	}
+	engine := normalizeEngine(profile.Connection.Engine)
+	driver := strings.ToLower(strings.TrimSpace(profile.Connection.Driver))
+	if driver != "" && driver != "native" && driver != "odbc" {
+		return Spec{}, fmt.Errorf("driver must be native or odbc")
+	}
+	if driver == "odbc" && engine == "" {
+		return Spec{}, fmt.Errorf("ODBC connections require a database engine")
+	}
+	if driver != "odbc" && (profile.Connection.ODBCDriver != "" || len(profile.Connection.ODBCOptions) > 0) {
+		return Spec{}, fmt.Errorf("odbc_driver and odbc_options require driver = odbc")
+	}
 
 	spec := Spec{
 		Name:          profile.Name,
-		Engine:        normalizeEngine(profile.Connection.Engine),
+		Engine:        engine,
 		Host:          profile.Connection.Host,
 		Port:          profile.Connection.Port,
 		User:          profile.Connection.User,
@@ -85,6 +99,9 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		ReadOnly:      profile.Connection.ReadOnly,
 		Timeout:       profile.Connection.EffectiveTimeout(),
 		SecretSources: map[string]string{},
+	}
+	if driver == "odbc" {
+		spec.Driver = "odbc"
 	}
 
 	actions, err := action.ParseList(profile.Connection.AllowActions)
@@ -126,16 +143,16 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 		if source != "" {
 			spec.SecretSources["password"] = source
 		}
-		switch spec.Engine {
-		case "postgres":
-			spec.DSN = buildPostgresDSN(spec, password, profile.Connection.SSLMode)
-		case "mysql":
-			spec.DSN = buildMySQLDSN(spec, password)
-		case "sqlite":
-			spec.DSN = buildSQLiteDSN(spec)
-		default:
-			return Spec{}, fmt.Errorf("unsupported engine %q", profile.Connection.Engine)
+		if spec.Driver == "odbc" {
+			spec.DSN, err = buildODBCDSN(ctx, profile.Connection, spec.Engine, password)
+		} else {
+			spec.DSN, err = buildNativeDSN(spec, password, profile.Connection.SSLMode)
 		}
+		if err != nil {
+			return Spec{}, err
+		}
+	} else if spec.Driver == "odbc" || requiresStructuredFields(spec.Engine) {
+		return Spec{}, fmt.Errorf("this engine/driver requires structured connection fields, not dsn/dsn_env")
 	}
 
 	return finalize(spec)
@@ -143,15 +160,21 @@ func Resolve(ctx context.Context, in ResolveInput) (Spec, error) {
 
 func finalize(spec Spec) (Spec, error) {
 	spec.Engine = normalizeEngine(spec.Engine)
-	switch spec.Engine {
-	case "postgres":
-		spec.Driver = "pgx"
-	case "mysql":
-		spec.Driver = "mysql"
-	case "sqlite":
-		spec.Driver = "sqlite"
-	default:
-		return Spec{}, fmt.Errorf("unsupported engine %q", spec.Engine)
+	if spec.Driver != "odbc" {
+		switch spec.Engine {
+		case "postgres":
+			spec.Driver = "pgx"
+		case "mysql":
+			spec.Driver = "mysql"
+		case "sqlite":
+			spec.Driver = "sqlite"
+		case "oracle":
+			spec.Driver = "oracledb"
+		case "dm", "sqlserver":
+			spec.Driver = spec.Engine
+		default:
+			return Spec{}, fmt.Errorf("unsupported engine %q", spec.Engine)
+		}
 	}
 	if len(spec.AllowActions) == 0 {
 		return Spec{}, fmt.Errorf("connection %q must define allow_actions", spec.Name)
@@ -279,13 +302,13 @@ func inferEnvironment(name string, tags []string) string {
 
 func displayTarget(spec Spec) string {
 	if spec.Engine == "sqlite" {
-		if spec.Path == "" {
+		if spec.Path == "" && spec.Driver != "odbc" {
 			return spec.DSN
 		}
 		return spec.Path
 	}
 	host := spec.Host
-	if host == "" && spec.DSN != "" {
+	if host == "" && spec.DSN != "" && spec.Driver != "odbc" {
 		if u, err := url.Parse(spec.DSN); err == nil {
 			host = u.Host
 		}
@@ -296,40 +319,6 @@ func displayTarget(spec Spec) string {
 	return host
 }
 
-func buildPostgresDSN(spec Spec, password, sslmode string) string {
-	query := url.Values{}
-	if sslmode == "" {
-		sslmode = "prefer"
-	}
-	query.Set("sslmode", sslmode)
-	u := &url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(spec.User, password),
-		Host:     fmt.Sprintf("%s:%d", spec.Host, defaultPort(spec.Port, 5432)),
-		Path:     spec.Database,
-		RawQuery: query.Encode(),
-	}
-	return u.String()
-}
-
-func buildMySQLDSN(spec Spec, password string) string {
-	address := fmt.Sprintf("tcp(%s:%d)", spec.Host, defaultPort(spec.Port, 3306))
-	return fmt.Sprintf("%s:%s@%s/%s?parseTime=true", spec.User, password, address, spec.Database)
-}
-
-func buildSQLiteDSN(spec Spec) string {
-	if strings.HasPrefix(spec.Path, "sqlite:") || strings.HasPrefix(spec.Path, "file:") {
-		return spec.Path
-	}
-	if spec.Path == "" || spec.Path == ":memory:" {
-		return "file::memory:"
-	}
-	if filepath.IsAbs(spec.Path) {
-		return "file:" + spec.Path
-	}
-	return "file:" + spec.Path
-}
-
 func inferEngine(dsn string) string {
 	raw := strings.ToLower(dsn)
 	switch {
@@ -337,6 +326,12 @@ func inferEngine(dsn string) string {
 		return "postgres"
 	case strings.HasPrefix(raw, "mysql://"):
 		return "mysql"
+	case strings.HasPrefix(raw, "oracle://"):
+		return "oracle"
+	case strings.HasPrefix(raw, "dm://"):
+		return "dm"
+	case strings.HasPrefix(raw, "sqlserver://"):
+		return "sqlserver"
 	case strings.HasPrefix(raw, "sqlite:"), strings.HasSuffix(raw, ".db"), strings.HasSuffix(raw, ".sqlite"):
 		return "sqlite"
 	default:
@@ -346,7 +341,7 @@ func inferEngine(dsn string) string {
 
 func dsnHasPassword(engine, dsn string) bool {
 	switch normalizeEngine(engine) {
-	case "postgres":
+	case "postgres", "oracle", "dm", "sqlserver":
 		if u, err := url.Parse(dsn); err == nil && u.User != nil {
 			_, ok := u.User.Password()
 			return ok
@@ -378,6 +373,10 @@ func normalizeEngine(engine string) string {
 		return "mysql"
 	case "sqlite", "sqlite3":
 		return "sqlite"
+	case "dm", "dameng":
+		return "dm"
+	case "sqlserver", "mssql":
+		return "sqlserver"
 	default:
 		return strings.ToLower(strings.TrimSpace(engine))
 	}
@@ -388,4 +387,12 @@ func defaultPort(port, fallback int) int {
 		return port
 	}
 	return fallback
+}
+
+func requiresStructuredFields(engine string) bool {
+	switch engine {
+	case "oracle", "dm", "sqlserver":
+		return true
+	}
+	return false
 }

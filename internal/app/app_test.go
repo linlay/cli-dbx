@@ -48,6 +48,14 @@ func TestExecuteRootHelpUsesStructuredLayout(t *testing.T) {
 	if strings.Contains(result.stdout, "resolve") {
 		t.Fatalf("hidden compatibility command should not appear in help, got:\n%s", result.stdout)
 	}
+	if !strings.Contains(result.stdout, "odbc") {
+		t.Fatalf("root help must advertise ODBC commands: %s", result.stdout)
+	}
+	for _, detail := range []string{"OceanBase", "built-in MySQL", "connection.driver", "CGO_ENABLED", "-tags odbc"} {
+		if strings.Contains(result.stdout, detail) {
+			t.Errorf("root help contains implementation detail %q", detail)
+		}
+	}
 	if result.stderr != "" {
 		t.Fatalf("expected empty stderr, got %q", result.stderr)
 	}
@@ -172,6 +180,26 @@ func TestVersionCommandAndFlag(t *testing.T) {
 	}
 	if strings.TrimSpace(flagResult.stdout) != "dbx v0.1.0 (commit abc1234, built 2026-03-25T12:00:00Z)" {
 		t.Fatalf("unexpected --version stdout: %q", flagResult.stdout)
+	}
+}
+
+func TestODBCDirectoryCommand(t *testing.T) {
+	t.Setenv("DBX_DRIVER_DIR", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	result := runCommand(t, nil, "odbc", "dir")
+	if result.code != ExitSuccess {
+		t.Fatalf("code=%d stderr=%q", result.code, result.stderr)
+	}
+	want := filepath.Join(home, ".config", "dbx", "drivers")
+	var envelope struct {
+		Data struct {
+			Path string `json:"path"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(result.stdout), &envelope) != nil || envelope.Data.Path != want {
+		t.Fatalf("unexpected output: %s", result.stdout)
 	}
 }
 
@@ -631,4 +659,44 @@ func quoteStrings(values []string) string {
 		quoted = append(quoted, fmt.Sprintf("%q", value))
 	}
 	return strings.Join(quoted, ", ")
+}
+
+func TestODBCDirectoryUsesConfiguredPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "custom drivers")
+	t.Setenv("DBX_DRIVER_DIR", dir)
+	result := runCommand(t, nil, "odbc", "dir")
+	var envelope struct {
+		Data struct {
+			Path string `json:"path"`
+		} `json:"data"`
+	}
+	if result.code != ExitSuccess || json.Unmarshal([]byte(result.stdout), &envelope) != nil || envelope.Data.Path != dir {
+		t.Fatalf("unexpected directory: %+v", result)
+	}
+}
+
+func TestODBCInstallIsNotAvailable(t *testing.T) {
+	result := runCommand(t, nil, "odbc", "--help")
+	if strings.Contains(result.stdout, "install <") || strings.Contains(result.stdout, "Verify and install") {
+		t.Fatalf("help still exposes install: %s", result.stdout)
+	}
+	result = runCommand(t, nil, "odbc", "install", "unused")
+	if result.code == ExitSuccess || !strings.Contains(result.stderr, "unknown command") {
+		t.Fatalf("expected unknown command: %+v", result)
+	}
+}
+
+func TestODBCListCommand(t *testing.T) {
+	t.Setenv("DBX_DRIVER_DIR", t.TempDir())
+	result := runCommand(t, nil, "odbc", "list")
+	var envelope struct {
+		OK   bool   `json:"ok"`
+		Kind string `json:"kind"`
+		Data struct {
+			Drivers []any `json:"drivers"`
+		} `json:"data"`
+	}
+	if result.code != ExitSuccess || json.Unmarshal([]byte(result.stdout), &envelope) != nil || !envelope.OK || envelope.Kind != "driver_list" || len(envelope.Data.Drivers) != 0 {
+		t.Fatalf("unexpected ODBC list: %+v", result)
+	}
 }
