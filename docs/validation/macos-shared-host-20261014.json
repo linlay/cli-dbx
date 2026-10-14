@@ -1,0 +1,170 @@
+{
+  "date": "2026-10-14",
+  "branch": "codex/dbx-shared-host",
+  "version": "v0.2.0-shared-host.8",
+  "base_commit": "a7c7d0a7a92988c2358aceac7d67f4b8b68dfa20",
+  "source_state": "Validation captured before commit, with Go 1.26 policy and Mac interface pointer changes on top of base_commit. Rebuild after commit changes embedded commit/time and host identity; regenerate paired modules.",
+  "platform": "darwin/arm64",
+  "toolchain": "go1.26.6",
+  "policy": {
+    "build_series": "Go 1.26",
+    "minimum": "go1.26.6 (Oracle dependency)",
+    "artifact_pairing": "Exact runtime.Version(), host SHA-256, dependency graph and platform still required; no cross-patch ABI guarantee."
+  },
+  "passed": [
+    "Native scripts/build-shared-host.sh --test using installed Go 1.26.6 and a freshly prepared private SDK from read-only module cache",
+    "Canonical signed host reconstruction has identical SHA-256",
+    "Root go test -tags dbmod ./... with actual host and separately packed SQLite fixture",
+    "TestSharedHostModuleSQLWorkflow: query, exact int64/binary, BOM/Chinese paths, import, limit rollback, transaction commit/rollback, policy, cancellation and recovery",
+    "TestSharedHostVendorModulesInitialize: each of postgres/oracle/dm/sqlserver with only its own module installed reaches accepted localhost TCP connection",
+    "Loader regressions including TestInterfaceMethodPointerUsesMask; tagged-pointer failure reproduced before fix",
+    "Seven Python regressions: version family/minimum, exact SDK cache identity, read-only source preservation, workspace minimum, canonical build checks",
+    "All four modules repacked in separate processes with identical bytes",
+    "Nested modules go test -tags dbmod ./... and DM fork go test ./...",
+    "Normal root go test ./...; four standalone driver submodules go test ./... (postgres/dm/sqlserver compile with no test files; Oracle tests pass)",
+    "codesign --verify --strict; host go version confirms go1.26.6",
+    "Component and Platform ZIP CRC checks and exact host/module/manifest payload checks; gzip decoded lengths equal manifest values",
+    "Windows amd64 shared-host cross-build with Go 1.26.6, CGO_ENABLED=0 and dbmod,dbmod_runtime tags",
+    "Shell syntax check and git diff --check"
+  ],
+  "limits": [
+    "Automated Mac vendor checks cover load/registration and TCP initialization; automated SQL workflow uses SQLite fixture. Later user-reported DM manual verification is recorded separately below, without per-command output.",
+    "No Windows runtime or PowerShell execution in this run; previous .7 Windows record remains historical.",
+    "Only Go 1.26.6 executed here. Acceptance of later 1.26 patches tested by script regressions, not a full toolchain matrix.",
+    "module_bytes is installed gzip DBXMOD2 size; decoded_bytes is serialized payload after decompression, not process RAM. No RAM measurement."
+  ],
+  "measurements": {
+    "host_bytes": 12070816,
+    "host_sha256": "5b8da14ab981ce2be9cb5bde4584bf9857a1efb08e6ca3cdd41dd51e81016df5",
+    "modules": {
+      "dm": {
+        "module_bytes": 1997290,
+        "manifest_bytes": 438,
+        "decoded_bytes": 4955711,
+        "prelink": {
+          "RelocationsBefore": 84873,
+          "RelocationsAfter": 60768,
+          "ResolvedRelocations": 24105,
+          "ResolvedByType": {
+            "R_ADDRARM64": 275,
+            "R_ADDROFF": 7889,
+            "R_ADDROFF|R_WEAK": 1261,
+            "R_CALLARM64": 5429,
+            "R_CALLARM64|R_WEAK": 14,
+            "R_METHODOFF": 9237
+          },
+          "RetainedCodeReserveBytes": 761208,
+          "RetainedResolvedReserveBytes": 93464,
+          "ReclaimedCodeBytes": 0
+        },
+        "sha256": "782cd3b0a5ed678173bacebab8b2ec658600eec25f1f4b575839bd3a5bbb0635"
+      },
+      "oracle": {
+        "module_bytes": 1346437,
+        "manifest_bytes": 446,
+        "decoded_bytes": 3738233,
+        "prelink": {
+          "RelocationsBefore": 81655,
+          "RelocationsAfter": 66476,
+          "ResolvedRelocations": 15179,
+          "ResolvedByType": {
+            "R_ADDRARM64": 129,
+            "R_ADDROFF": 5827,
+            "R_ADDROFF|R_WEAK": 1014,
+            "R_CALLARM64": 3283,
+            "R_CALLARM64|R_WEAK": 12,
+            "R_METHODOFF": 4914
+          },
+          "RetainedCodeReserveBytes": 875216,
+          "RetainedResolvedReserveBytes": 55624,
+          "ReclaimedCodeBytes": 0
+        },
+        "sha256": "6e5dc144f301219a1ecd3fbd51ad4a92cf1b8a4e804720f66764898b8ccc107d"
+      },
+      "postgres": {
+        "module_bytes": 1792875,
+        "manifest_bytes": 450,
+        "decoded_bytes": 5897988,
+        "prelink": {
+          "RelocationsBefore": 123531,
+          "RelocationsAfter": 88003,
+          "ResolvedRelocations": 35528,
+          "ResolvedByType": {
+            "R_ADDRARM64": 155,
+            "R_ADDROFF": 13729,
+            "R_ADDROFF|R_WEAK": 1085,
+            "R_CALLARM64": 3810,
+            "R_CALLARM64|R_WEAK": 6,
+            "R_METHODOFF": 16743
+          },
+          "RetainedCodeReserveBytes": 1061088,
+          "RetainedResolvedReserveBytes": 64680,
+          "ReclaimedCodeBytes": 0
+        },
+        "sha256": "b29a4a0dd534c77ed3eac09642faa09473b0f48f97792a3079d1030a1b7364be"
+      },
+      "sqlserver": {
+        "module_bytes": 713978,
+        "manifest_bytes": 452,
+        "decoded_bytes": 1912126,
+        "prelink": {
+          "RelocationsBefore": 24435,
+          "RelocationsAfter": 18937,
+          "ResolvedRelocations": 5498,
+          "ResolvedByType": {
+            "R_ADDRARM64": 25,
+            "R_ADDROFF": 2214,
+            "R_ADDROFF|R_WEAK": 364,
+            "R_CALLARM64": 1115,
+            "R_CALLARM64|R_WEAK": 4,
+            "R_METHODOFF": 1776
+          },
+          "RetainedCodeReserveBytes": 221000,
+          "RetainedResolvedReserveBytes": 18440,
+          "ReclaimedCodeBytes": 0
+        },
+        "sha256": "39d0f80ed295c8bf14c070519fe3255d9432a9e38a026026f03d1180e5e6ed4d"
+      }
+    }
+  },
+  "archives": {
+    "builtin.dbx_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 4873927,
+      "sha256": "b1830165c5bfe4998028f741c768a76cbb10ee2ece2452a67da48c57d99dc2df"
+    },
+    "dbx-module-dm_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 1990136,
+      "sha256": "0c1c2c233df5c474939490f8f07273d71240df19a24616998c0258f02074f3ca"
+    },
+    "dbx-module-oracle_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 1341699,
+      "sha256": "8b675d6b58f5d188089e7951d6d099a29616ef6d2f8c77a4aa0c7bb2cb02d45d"
+    },
+    "dbx-module-postgres_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 1776954,
+      "sha256": "761b1869de5fac1e6e1fe199fe6bd2b6b77e29343806b7e8af5f72c0d851047d"
+    },
+    "dbx-module-sqlserver_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 640727,
+      "sha256": "ca8a4f88523728a686470d49295f4bcdbd5d498d5b5391e728f3bdd8628ebdf2"
+    },
+    "dbx-shared-host_v0.2.0-shared-host.8_darwin_arm64.zip": {
+      "bytes": 4700245,
+      "sha256": "3f854145cca883259d6d2c3ee6d2136370c33b7c57c6b7e84b32f72983408621"
+    }
+  },
+  "logs": [
+    "dist/go126-native-build.log",
+    "dist/go126-normal-tests.log",
+    "dist/go126-driver-tests.log",
+    "dist/go126-windows-crosscheck.log"
+  ],
+  "user_reported_verification": {
+    "date": "2026-10-14",
+    "engine": "dm",
+    "statement": "用户报告：我验证可行。",
+    "context": "User tested shared-host CLI and DM module using existing local connection configuration after receiving module removal/restoration instructions.",
+    "evidence_scope": "User confirmation of DM pluggability, not an automated transcript. Per-command outputs, broader SQL coverage and other vendor databases were not supplied.",
+    "privacy": "Private connection files, credentials and temporary binaries are excluded from the commit."
+  }
+}

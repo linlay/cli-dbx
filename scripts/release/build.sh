@@ -106,7 +106,7 @@ for target in "${targets[@]}"; do
     cp "$repo_root/LICENSE" "$package_dir/LICENSE"
   fi
 
-  python3 "$repo_root/scripts/reproducible-package.py" --stage "$package_dir" --output "$dist_dir/$archive_name"
+  python3 "$repo_root/scripts/reproducible-package.py" --stage "$package_dir" --output "$dist_dir/$archive_name" --executable "$binary_name"
 done
 
 (

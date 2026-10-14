@@ -11,6 +11,10 @@ SQL、`conn`、`inspect`、`import`、`tx` 等命令默认使用结构化输出�
 
 `export` 自己写文件，不走 `table` / `json` 查询展示格式，而是通过 `--format csv|json` 控制输出文件格式。
 
+格式不支持时会在数据库执行前报错，导出也会在创建或覆盖目标文件前拒绝错误格式。
+重复结果列使用唯一后缀，并跳过查询中已有的列名；需要固定字段名时使用显式 `AS`。
+JSON 导入保留 int64 整数，更大的整数和高精度数字以原始数字文本绑定，最终精度由数据库列类型决定。
+
 ## Query Pagination
 
 `query` 默认最多物化 `100` 行。
@@ -69,7 +73,11 @@ dbx query local-sqlite 'select * from users order by id' --cursor 100
 - 命令动作必须和 SQL 分类一致
 - `allow_actions` 必须放行当前动作
 - `update` / `delete` 缺少 `WHERE` 会被拦截
+- `WHERE` 必须属于最外层写语句；CTE、子查询和字符串中的条件不算
+- 写入型 CTE 和对写语句的 `EXPLAIN` 会被拒绝；修改配置的 SQLite `PRAGMA` 必须使用 `admin`
 - 多语句默认阻断
+
+`admin` 不由 DBX 包装事务，支持 SQLite `VACUUM`；管理动作不适用 `--max-rows-affected`。
 
 ## Prod-Like Connections
 

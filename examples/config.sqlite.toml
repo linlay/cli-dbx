@@ -1,0 +1,5 @@
+[connection]
+engine = "sqlite"
+path = "./demo.db"
+allow_actions = ["query"]
+tags = ["local"]

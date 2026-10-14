@@ -1,16 +1,19 @@
 module github.com/linlay/cli-dbx
 
-go 1.22
+go 1.26.6
 
 replace github.com/spf13/cobra => ./third_party/cobra
+
+replace github.com/pkujhd/goloader => ./third_party/goloader
 
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/go-sql-driver/mysql v1.8.1
-	github.com/jackc/pgx/v5 v5.7.2
+	github.com/pkujhd/goloader v0.0.0
 	github.com/spf13/cobra v1.10.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.31.0
+	golang.org/x/sys v0.28.0
 	golang.org/x/term v0.27.0
 	modernc.org/sqlite v1.34.2
 )
@@ -22,15 +25,11 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/sync v0.10.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

@@ -1,0 +1,2 @@
+# Preserve line-ending fixtures used by the manual import tests.
+examples/**/*.csv -text whitespace=cr-at-eol

@@ -1,0 +1,17 @@
+# Install the platform-matching DBX ODBC adapter and its manifest; add .exe on Windows.
+# Replace odbc_driver and options with the installed vendor library's values.
+# On Windows the vendor installer must also register the driver.
+[connection]
+engine = "sqlserver"
+driver = "odbc"
+driver_path = "~/.config/dbx/drivers/dbx-driver-sqlserver-odbc-0.2.0-driver-process.3"
+odbc_driver = "/path/to/vendor/lib/libvendor.so" # Use the actual .dylib or .dll on macOS/Windows.
+host = "127.0.0.1"
+port = 1433
+database = "appdb"
+user = "app"
+# Run dbx secret encrypt and add its password line.
+allow_actions = ["query"]
+
+[connection.odbc_options]
+Encrypt = "yes"

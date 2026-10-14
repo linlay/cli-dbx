@@ -1,0 +1,9 @@
+# Copy to a private connection file and replace host, port, user and database.
+# Run dbx secret encrypt and add the generated password line once.
+[connection]
+engine = "mysql"
+host = "127.0.0.1"
+port = 3306
+user = "app"
+database = "appdb"
+allow_actions = ["query"]

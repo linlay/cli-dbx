@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/linlay/cli-dbx/internal/sqlclass"
+	"github.com/linlay/cli-dbx/internal/sqllex"
 )
 
 type Analysis struct {
@@ -31,381 +31,327 @@ type StatementAnalysis struct {
 	UnsafeWrite bool                    `json:"unsafe_write"`
 }
 
-func Analyze(sql string) Analysis {
-	stmts := splitStatements(sql)
-	result := Analysis{
-		Raw:        sql,
-		Statements: make([]StatementAnalysis, 0, len(stmts)),
+func Analyze(sql string) Analysis { return analyze(sql, "") }
+
+func analyze(sql, engine string) Analysis {
+	result := Analysis{Raw: sql, StatementClass: sqlclass.ClassUnknown, Statements: []StatementAnalysis{}}
+	tokens, err := sqllex.Scan(sql)
+	if err != nil {
+		result.BlockedByDefault = true
+		return result
 	}
-	objectSet := map[string]struct{}{}
-	for _, stmt := range stmts {
-		item := analyzeStatement(stmt)
-		result.Statements = append(result.Statements, item)
-		for _, object := range item.Objects {
-			objectSet[object] = struct{}{}
+	objects := map[string]struct{}{}
+	appendStatement := func(part []sqllex.Token) {
+		if len(part) == 0 {
+			return
 		}
-		if result.StatementClass == "" || result.StatementClass == sqlclass.ClassUnknown {
+		item := analyzeStatement(sql[part[0].Start:part[len(part)-1].End], part, engine)
+		result.Statements = append(result.Statements, item)
+		if len(result.Statements) == 1 {
 			result.StatementClass = item.Class
 		}
-		if item.UnsafeWrite {
-			result.HasUnsafeWrite = true
+		for _, object := range item.Objects {
+			objects[object] = struct{}{}
+		}
+		result.HasUnsafeWrite = result.HasUnsafeWrite || item.UnsafeWrite
+		if item.Class == sqlclass.ClassUnknown {
+			result.BlockedByDefault = true
 		}
 		if item.Class == sqlclass.ClassWriteData || item.Class == sqlclass.ClassDDL || item.Class == sqlclass.ClassAdmin {
 			result.NeedsAck = true
 		}
 	}
-	if len(result.Statements) > 1 {
-		result.MultiStatement = true
-		result.BlockedByDefault = true
+	start := 0
+	for i, t := range tokens {
+		if t.Kind == sqllex.Symbol && t.Text == ";" {
+			appendStatement(tokens[start:i])
+			start = i + 1
+		}
 	}
-	if result.StatementClass == "" {
-		result.StatementClass = sqlclass.ClassUnknown
-	}
-	for object := range objectSet {
+	appendStatement(tokens[start:])
+	result.MultiStatement = len(result.Statements) > 1
+	result.BlockedByDefault = result.BlockedByDefault || result.MultiStatement
+	for object := range objects {
 		result.Objects = append(result.Objects, object)
 	}
 	sort.Strings(result.Objects)
 	return result
 }
 
-func analyzeStatement(sql string) StatementAnalysis {
-	stmt := strings.TrimSpace(stripComments(sql))
-	item := StatementAnalysis{
-		SQL:      stmt,
-		Class:    sqlclass.ClassUnknown,
-		HasWhere: containsKeyword(stmt, "where"),
-		HasLimit: containsKeyword(stmt, "limit"),
+// AnalyzeForEngine adds dialect checks to the ordinary statement analysis.
+// SQL Server permits adjacent commands without semicolons, so a second
+// top-level command is blocked even when the generic splitter sees one part.
+func AnalyzeForEngine(engine, sql string) Analysis {
+	if _, err := sqllex.ScanForEngine(engine, sql); err != nil {
+		return Analysis{Raw: sql, StatementClass: sqlclass.ClassUnknown, Statements: []StatementAnalysis{}, BlockedByDefault: true}
 	}
-	if stmt == "" {
-		return item
+	result := analyze(sql, engine)
+	if engine == "sqlserver" && hasAdjacentSQLServerCommand(sql) {
+		result.MultiStatement = true
+		result.BlockedByDefault = true
 	}
-	tokens := tokenize(stmt)
-	if len(tokens) == 0 {
-		return item
-	}
-	actionIndex := 0
-	action := strings.ToLower(tokens[0])
-	if action == "with" {
-		actionIndex = findCTEAction(tokens)
-		if actionIndex >= len(tokens) {
-			return item
+	return result
+}
+
+func hasAdjacentSQLServerCommand(sql string) bool {
+	words := sqlServerTopLevelWords(sql)
+	command := func(word string) bool {
+		switch word {
+		case "select", "insert", "update", "delete", "merge", "create", "alter", "drop", "truncate", "grant", "deny", "revoke", "exec", "execute", "use", "declare", "backup", "restore", "dbcc", "waitfor", "set", "if", "while", "begin", "commit", "rollback", "save", "print", "raiserror", "throw", "bulk", "enable", "disable", "kill", "shutdown", "reconfigure", "checkpoint", "revert", "break", "continue", "goto", "return", "readtext", "writetext", "updatetext", "send", "receive", "open", "close", "deallocate":
+			return true
 		}
-		action = strings.ToLower(tokens[actionIndex])
+		return false
 	}
-	item.Action = action
-	item.Class = classifyToken(action)
-	item.Objects = extractObjects(tokens, action)
+	first := -1
+	for i, word := range words {
+		if command(word) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return false
+	}
+	initial := words[first]
+	allowedSelect := false
+	allowedSet := 0
+	if initial == "update" {
+		allowedSet = 1
+	}
+	for i := first + 1; i < len(words); i++ {
+		word := words[i]
+		if !command(word) {
+			continue
+		}
+		prev := words[i-1]
+		if word == "set" && allowedSet > 0 {
+			allowedSet--
+			continue
+		}
+		if word == "select" {
+			if prev == "union" || prev == "except" || prev == "intersect" || prev == "all" && i > 1 && words[i-2] == "union" {
+				continue
+			}
+			if initial == "insert" && !allowedSelect && !containsWord(words[first:i], "values") {
+				allowedSelect = true
+				continue
+			}
+			if (initial == "create" || initial == "alter") && !allowedSelect && prev == "as" && containsWord(words[first:i], "view") {
+				allowedSelect = true
+				continue
+			}
+		}
+		if initial == "merge" && prev == "then" && (word == "update" || word == "insert" || word == "delete") {
+			if word == "update" {
+				allowedSet++
+			}
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func containsWord(words []string, target string) bool {
+	for _, word := range words {
+		if word == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sqlServerTopLevelWords(sql string) []string {
+	tokens, err := sqllex.Scan(sql)
+	if err != nil {
+		return nil
+	}
+	var words []string
+	for _, t := range tokens {
+		if t.Kind == sqllex.Word && t.Depth == 0 {
+			words = append(words, strings.ToLower(t.Text))
+		}
+	}
+	return words
+}
+
+func analyzeStatement(sql string, tokens []sqllex.Token, engine string) StatementAnalysis {
+	item := StatementAnalysis{SQL: sql, Class: sqlclass.Classify(sql)}
+	outer, _, _, ok := sqllex.With(tokens)
+	if !ok || len(outer) == 0 {
+		return item
+	}
+	if outer[0].Kind == sqllex.Word {
+		item.Action = strings.ToLower(outer[0].Text)
+	}
+	item.HasWhere = sqllex.HasTop(outer, "where")
+	item.HasLimit = sqllex.HasTop(outer, "limit")
+	item.UnsafeWrite = (item.Action == "update" || item.Action == "delete") && !item.HasWhere
+	item.Objects = extractObjects(tokens, engine)
 	if len(item.Objects) > 0 {
 		item.Object = item.Objects[0]
-	}
-	if (action == "update" || action == "delete") && !item.HasWhere {
-		item.UnsafeWrite = true
 	}
 	return item
 }
 
-func classifyToken(token string) sqlclass.StatementClass {
-	switch token {
-	case "select", "show", "describe", "desc", "pragma", "explain":
-		return sqlclass.ClassRead
-	case "insert", "update", "delete", "replace", "merge":
-		return sqlclass.ClassWriteData
-	case "create", "alter", "drop", "truncate", "rename":
-		return sqlclass.ClassDDL
-	case "grant", "revoke", "analyze", "vacuum", "set", "reset":
-		return sqlclass.ClassAdmin
-	default:
-		return sqlclass.ClassUnknown
-	}
-}
-
-func extractObjects(tokens []string, action string) []string {
-	cteNames := collectCTENames(tokens)
+func extractObjects(tokens []sqllex.Token, engine string) []string {
 	objects := map[string]struct{}{}
-	add := func(token string) {
-		ident := cleanIdent(token)
-		if ident == "" {
+	var walk func([]sqllex.Token, map[string]bool, bool)
+	walk = func(tokens []sqllex.Token, visible map[string]bool, relation bool) {
+		if len(tokens) == 0 {
 			return
 		}
-		if _, ok := cteNames[strings.ToLower(ident)]; ok {
+		if tokens[0].Is("explain") {
+			for i, t := range tokens[1:] {
+				if t.Depth == tokens[0].Depth && (t.Is("select") || t.Is("with") || t.Is("values")) {
+					walk(tokens[i+1:], visible, false)
+					return
+				}
+			}
+		}
+		outer, ctes, recursive, ok := sqllex.With(tokens)
+		if !ok {
 			return
 		}
-		objects[ident] = struct{}{}
-	}
-	expectTable := false
-	inTableList := false
-	for i := 0; i < len(tokens); i++ {
-		token := tokens[i]
-		lower := strings.ToLower(token)
-		switch lower {
-		case "from", "join", "into":
-			expectTable = true
-			inTableList = true
-			continue
-		case "update", "truncate":
-			expectTable = true
-			inTableList = false
-			continue
-		case "table", "view":
-			if action == "create" || action == "alter" || action == "drop" || action == "rename" {
-				expectTable = true
-				inTableList = true
-			}
-			continue
-		case "on":
-			if action == "create" && hasToken(tokens, "index") {
-				expectTable = true
-			} else {
-				expectTable = false
-				inTableList = false
-			}
-			continue
-		case "where", "group", "order", "limit", "having", "set", "values", "returning", "using", "with":
-			expectTable = false
-			inTableList = false
-			continue
-		case ",":
-			if inTableList {
-				expectTable = true
-			}
-			continue
-		case "if", "not", "exists", "only":
-			continue
+		names := make(map[string]bool, len(visible)+len(ctes))
+		for name := range visible {
+			names[name] = true
 		}
-		if expectTable {
-			if token == "(" || token == ")" {
+		if recursive {
+			for _, cte := range ctes {
+				names[strings.ToLower(cte.Name)] = true
+			}
+		}
+		for _, cte := range ctes {
+			body := cte.Body
+			// SQLite and SQL Server allow recursive CTEs without RECURSIVE.
+			// Only the UNION tail may refer to this CTE: the anchor still has
+			// ordinary table lookup, so a physical namesake cannot be hidden.
+			if !recursive && (engine == "sqlite" || engine == "sqlserver") {
+				for i, t := range body {
+					if t.Depth == body[0].Depth && t.Is("union") {
+						walk(body[:i], names, false)
+						self := make(map[string]bool, len(names)+1)
+						for name := range names {
+							self[name] = true
+						}
+						self[strings.ToLower(cte.Name)] = true
+						walk(body[i+1:], self, false)
+						body = nil
+						break
+					}
+				}
+			}
+			walk(body, names, false)
+			names[strings.ToLower(cte.Name)] = true
+		}
+		tokens = outer
+		if len(tokens) == 0 {
+			return
+		}
+		action := strings.ToLower(tokens[0].Text)
+		// Parentheses in a FROM/JOIN/USING position may group relations,
+		// not just SELECT subqueries. Preserve that context through nested groups.
+		grouped := relation && !tokens[0].Is("select") && !tokens[0].Is("values") && len(ctes) == 0
+		expect, inList := grouped, grouped
+		for i := 0; i < len(tokens); i++ {
+			t := tokens[i]
+			// SQL Server places TOP (expression) [PERCENT] before MERGE's
+			// optional INTO and target. Its argument is an expression, not a table.
+			if action == "merge" && i == 1 && t.Is("top") {
+				if end := sqllex.Matching(tokens, i+1); end >= 0 {
+					walk(tokens[i+2:end], names, false)
+					i = end
+					if i+1 < len(tokens) && tokens[i+1].Is("percent") {
+						i++
+					}
+					expect = true
+					continue
+				}
+			}
+			if t.Kind == sqllex.Symbol && t.Text == "(" {
+				end := sqllex.Matching(tokens, i)
+				if end < 0 {
+					return
+				}
+				walk(tokens[i+1:end], names, expect)
+				i = end
+				expect = false
 				continue
 			}
-			add(token)
-			expectTable = false
+			if t.Kind == sqllex.Symbol && t.Text == "," {
+				if inList {
+					expect = true
+				}
+				continue
+			}
+			if t.Kind == sqllex.Word {
+				switch strings.ToLower(t.Text) {
+				case "from", "join", "into":
+					expect = true
+					inList = true
+					continue
+				case "using":
+					if action == "delete" || action == "merge" {
+						expect = true
+						inList = true
+					} else {
+						expect = false
+						inList = false
+					}
+					continue
+				case "update", "merge":
+					if i == 0 {
+						expect = true
+						inList = false
+					}
+					continue
+				case "truncate":
+					expect = true
+					inList = false
+					continue
+				case "table", "view":
+					if action == "create" || action == "alter" || action == "drop" || action == "rename" || action == "truncate" {
+						expect = true
+						inList = true
+					}
+					continue
+				case "on":
+					expect = action == "create" && sqllex.HasTop(tokens, "index")
+					inList = false
+					continue
+				case "where", "group", "order", "limit", "having", "set", "values", "returning", "union", "except", "intersect", "when":
+					expect = false
+					inList = false
+					continue
+				case "if", "not", "exists", "only", "lateral", "temp", "temporary":
+					if expect {
+						continue
+					}
+				}
+			}
+			// SQLite also accepts single-quoted names in relation positions.
+			// Literals elsewhere remain values and never become table references.
+			if expect && (t.Ident() || t.Kind == sqllex.Literal) {
+				name := t.Text
+				for i+2 < len(tokens) && tokens[i+1].Kind == sqllex.Symbol && tokens[i+1].Text == "." && (tokens[i+2].Ident() || tokens[i+2].Kind == sqllex.Literal) {
+					name += "." + tokens[i+2].Text
+					i += 2
+				}
+				if !names[strings.ToLower(name)] {
+					objects[name] = struct{}{}
+				}
+				expect = false
+			}
 		}
 	}
-	out := make([]string, 0, len(objects))
+	walk(tokens, nil, false)
+	var out []string
 	for object := range objects {
 		out = append(out, object)
 	}
 	sort.Strings(out)
 	return out
-}
-
-func splitStatements(sql string) []string {
-	var parts []string
-	var current strings.Builder
-	var quote rune
-	for i := 0; i < len(sql); i++ {
-		ch := rune(sql[i])
-		if quote != 0 {
-			current.WriteByte(sql[i])
-			if ch == quote {
-				quote = 0
-			} else if ch == '\\' && i+1 < len(sql) {
-				i++
-				current.WriteByte(sql[i])
-			}
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '-' && sql[i+1] == '-' {
-			for i < len(sql) && sql[i] != '\n' {
-				current.WriteByte(sql[i])
-				i++
-			}
-			if i < len(sql) {
-				current.WriteByte(sql[i])
-			}
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '/' && sql[i+1] == '*' {
-			current.WriteByte(sql[i])
-			i++
-			current.WriteByte(sql[i])
-			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
-				i++
-				current.WriteByte(sql[i])
-			}
-			if i+1 < len(sql) {
-				i++
-				current.WriteByte(sql[i])
-			}
-			continue
-		}
-		switch ch {
-		case '\'', '"', '`':
-			quote = ch
-			current.WriteByte(sql[i])
-		case ';':
-			part := strings.TrimSpace(current.String())
-			if part != "" {
-				parts = append(parts, part)
-			}
-			current.Reset()
-		default:
-			current.WriteByte(sql[i])
-		}
-	}
-	part := strings.TrimSpace(current.String())
-	if part != "" {
-		parts = append(parts, part)
-	}
-	return parts
-}
-
-func stripComments(sql string) string {
-	var b strings.Builder
-	inLine := false
-	inBlock := false
-	for i := 0; i < len(sql); i++ {
-		if inLine {
-			if sql[i] == '\n' {
-				inLine = false
-				b.WriteByte(sql[i])
-			}
-			continue
-		}
-		if inBlock {
-			if i+1 < len(sql) && sql[i] == '*' && sql[i+1] == '/' {
-				inBlock = false
-				i++
-			}
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '-' && sql[i+1] == '-' {
-			inLine = true
-			i++
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '/' && sql[i+1] == '*' {
-			inBlock = true
-			i++
-			continue
-		}
-		b.WriteByte(sql[i])
-	}
-	return b.String()
-}
-
-func tokenize(sql string) []string {
-	var tokens []string
-	var current strings.Builder
-	flush := func() {
-		if current.Len() > 0 {
-			tokens = append(tokens, current.String())
-			current.Reset()
-		}
-	}
-	for _, r := range sql {
-		switch {
-		case unicode.IsSpace(r):
-			flush()
-		case strings.ContainsRune("(),", r):
-			flush()
-			tokens = append(tokens, string(r))
-		default:
-			current.WriteRune(r)
-		}
-	}
-	flush()
-	return tokens
-}
-
-func findCTEAction(tokens []string) int {
-	depth := 0
-	for i := 1; i < len(tokens); i++ {
-		switch tokens[i] {
-		case "(":
-			depth++
-		case ")":
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 {
-				token := strings.ToLower(tokens[i])
-				if classifyToken(token) != sqlclass.ClassUnknown || token == "with" {
-					return i
-				}
-			}
-		}
-	}
-	return len(tokens)
-}
-
-func collectCTENames(tokens []string) map[string]struct{} {
-	out := map[string]struct{}{}
-	if len(tokens) == 0 || !strings.EqualFold(tokens[0], "with") {
-		return out
-	}
-	i := 1
-	if i < len(tokens) && strings.EqualFold(tokens[i], "recursive") {
-		i++
-	}
-	for i < len(tokens) {
-		name := cleanIdent(tokens[i])
-		if name == "" || classifyToken(strings.ToLower(name)) != sqlclass.ClassUnknown {
-			return out
-		}
-		out[strings.ToLower(name)] = struct{}{}
-		i++
-		if i < len(tokens) && tokens[i] == "(" {
-			i = skipTokenBalanced(tokens, i)
-		}
-		if i >= len(tokens) || !strings.EqualFold(tokens[i], "as") {
-			return out
-		}
-		i++
-		if i >= len(tokens) || tokens[i] != "(" {
-			return out
-		}
-		i = skipTokenBalanced(tokens, i)
-		if i >= len(tokens) || tokens[i] != "," {
-			return out
-		}
-		i++
-	}
-	return out
-}
-
-func skipTokenBalanced(tokens []string, start int) int {
-	depth := 0
-	for i := start; i < len(tokens); i++ {
-		switch tokens[i] {
-		case "(":
-			depth++
-		case ")":
-			depth--
-			if depth == 0 {
-				return i + 1
-			}
-		}
-	}
-	return len(tokens)
-}
-
-func hasToken(tokens []string, target string) bool {
-	for _, token := range tokens {
-		if strings.EqualFold(token, target) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsKeyword(sql, keyword string) bool {
-	target := strings.ToLower(keyword)
-	for _, token := range tokenize(strings.ToLower(stripComments(sql))) {
-		if token == target {
-			return true
-		}
-	}
-	return false
-}
-
-func cleanIdent(ident string) string {
-	ident = strings.Trim(ident, "`\"'")
-	parts := strings.Split(ident, ".")
-	for i, part := range parts {
-		parts[i] = strings.Trim(part, "`\"'")
-	}
-	return strings.Join(parts, ".")
 }
 
 func (a Analysis) ValidateSingleStatement() error {

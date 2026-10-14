@@ -1,0 +1,102 @@
+//go:build 386 || amd64
+// +build 386 amd64
+
+package obj
+
+import (
+	"cmd/objfile/sys"
+	"fmt"
+
+	_ "unsafe"
+)
+
+//see:src/cmd/vendor/golang.org/x/arch/x86/x86asm
+type Op uint32
+
+// Prefixes is an array of prefixes associated with a single instruction.
+// The prefixes are listed in the same order as found in the instruction:
+// each prefix byte corresponds to one slot in the array. The first zero
+// in the array marks the end of the prefixes.
+type Prefixes [14]Prefix
+
+// A Prefix represents an Intel instruction prefix.
+// The low 8 bits are the actual prefix byte encoding,
+// and the top 8 bits contain distinguishing bits and metadata.
+type Prefix uint16
+
+// An Arg is a single instruction argument,
+// one of these types: Reg, Mem, Imm, Rel.
+type Arg interface {
+	String() string
+	isArg()
+}
+
+func (op Op) String() string { return OpString(op) }
+
+func MarkReloc(text []byte, relocs []Reloc, offset int, archName string) {
+	pc := 0
+	relocId := 0
+	arch := 32
+	if archName == sys.ArchAMD64.Name {
+		arch = 64
+	}
+	relocsLen := len(relocs)
+	if relocsLen == 0 {
+		return
+	}
+	textLen := len(text)
+	for textLen != pc && relocId < relocsLen {
+		inst, err := Decode(text[pc:], arch)
+		if err != nil || inst.Len == 0 || inst.Op == 0 {
+			pc = pc + 1
+		} else {
+			for relocId < relocsLen && relocs[relocId].Offset >= pc && relocs[relocId].Offset < pc+inst.Len {
+				relocs[relocId].Op = uint(inst.Op)
+				relocs[relocId].OpName = inst.Op.String()
+				relocs[relocId].Text = text[pc : pc+inst.Len]
+				relocs[relocId].Start = pc + offset
+				relocs[relocId].End = pc + offset + inst.Len
+				for _, arg := range inst.Args {
+					if arg != nil {
+						relocs[relocId].Args = append(relocs[relocId].Args, arg.String())
+					}
+				}
+				relocId++
+			}
+			pc = pc + inst.Len
+		}
+	}
+}
+
+func GetOpName(op uint) string {
+	if runtimeOnly {
+		return fmt.Sprintf("opcode_%d", op)
+	}
+	return Op(op).String()
+}
+
+func DumpCode(text []byte, archName string) {
+	pc := 0
+	textLen := len(text)
+	arch := 32
+	if archName == sys.ArchAMD64.Name {
+		arch = 64
+	}
+	for textLen != pc {
+		inst, err := Decode(text[pc:], arch)
+		if err != nil {
+			fmt.Println("x86asm.Decode failed")
+		}
+		fmt.Println(inst)
+		pc = pc + inst.Len
+	}
+}
+
+func IsExtraRegister(regName string) bool {
+	switch regName {
+	case "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15":
+		return true
+	default:
+		return false
+	}
+}

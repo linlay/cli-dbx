@@ -75,3 +75,4 @@ dbx tx <conn> --plan ./plan.json
 ```
 
 `tx` 只接受 `query` 和 `update` step；任一步失败时整笔事务回滚。
+计划必须是一个完整 UTF-8 JSON 文档，可带 BOM。未知字段、第二个 JSON 文档和尾随垃圾会在执行前被拒绝。

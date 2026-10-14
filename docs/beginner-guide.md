@@ -64,6 +64,8 @@ tags = ["local"]
 EOF
 ```
 
+Windows 默认配置目录是 `$env:USERPROFILE\.config\dbx`，命令中的 `./dbx` 改为 `.\dbx.exe`。文件请保存为 UTF-8，可带 BOM；PowerShell 写文件时指定 `-Encoding UTF8`，完整示例见 [README](../README.md#3-配置说明)。TOML 中的 Windows 路径可写为 `path = 'C:\data\demo.db'`。
+
 测试：
 
 ```bash
@@ -142,6 +144,7 @@ id,name
 - `tx` 目前只支持 `query` 和 `update`
 - 不支持把 `schema` 或 `admin` 放进事务计划
 - 不支持跨连接事务，也不支持跨多次 CLI 调用保留事务会话
+- 计划必须是一个完整 JSON 文档，未知字段和尾随内容会在执行前被拒绝
 
 ## 6. 如果你用 PostgreSQL 或 MySQL
 
@@ -222,6 +225,7 @@ allow_actions = ["query"]
 
 检查 `path` 是不是你预期的文件位置。  
 如果你用相对路径，它是相对于配置文件所在目录，不是相对于命令执行时的当前目录。
+普通文件名中的空格、中文、`#` 和 `%` 会保留。`?mode=ro` 等查询参数继续生效；显式 `file:` URI 中的特殊文件名按 URI 规则编码。
 
 ## 8. 推荐学习顺序
 

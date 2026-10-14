@@ -179,3 +179,80 @@ func TestAllowsTableDefaultsToUnrestricted(t *testing.T) {
 		t.Fatal("empty allow_tables should not restrict tables")
 	}
 }
+
+func TestResolveExternalDriverDirAndAliases(t *testing.T) {
+	for _, tc := range []struct{ engine, canonical, driver, dsn string }{
+		{"pg", "postgres", "pgx", "postgres://localhost/test"},
+		{"dameng", "dm", "dm", "dm://user:pass@localhost:5236?connectTimeout=15000"},
+		{"sql_server", "sqlserver", "sqlserver", "sqlserver://user:pass@localhost:1433?database=test"},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			dir := writeConfig(t, "remote", "[connection]\nengine = \""+tc.engine+"\"\ndsn = \""+tc.dsn+"\"\ndriver_dir = \"custom/drivers\"\nallow_actions = [\"query\"]\n")
+			spec, err := Resolve(context.Background(), ResolveInput{ConfigPath: dir, Name: "remote", Action: action.Query})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.Engine != tc.canonical || spec.Driver != tc.driver || spec.DriverDir != "custom/drivers" {
+				t.Fatalf("spec = %#v", spec)
+			}
+		})
+	}
+}
+
+func TestResolveStructuredExternalDSNs(t *testing.T) {
+	for _, tc := range []struct{ engine, expected string }{
+		{"oracle", "oracle://app:p%40ss@localhost:1521/appdb"},
+		{"dm", "dm://app:p@ss@localhost:5236?connectTimeout=15000"},
+		{"sqlserver", "sqlserver://app:p%40ss@localhost:1433?database=appdb"},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			dir := writeConfig(t, "remote", "[connection]\nengine = \""+tc.engine+"\"\nhost = \"localhost\"\nuser = \"app\"\npassword = \"p@ss\"\ndatabase = \"appdb\"\nallow_actions = [\"query\"]\n")
+			spec, err := Resolve(context.Background(), ResolveInput{ConfigPath: dir, Name: "remote", Action: action.Query})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.DSN != tc.expected {
+				t.Fatalf("dsn = %q, want %q", spec.DSN, tc.expected)
+			}
+		})
+	}
+}
+
+func TestResolveRejectsUnsupportedExternalDSNGrammarWithoutEchoingCredentials(t *testing.T) {
+	for _, tc := range []struct{ engine, dsn string }{
+		{"oracle", "user/secret-password@host/service"},
+		{"dm", "user:secret-password@host:5236"},
+		{"sqlserver", "server=host;user id=user;password=secret-password"},
+		{"sqlserver", "sqlserver://host?password=secret-password"},
+		{"dm", "dm://app:placeholder@localhost:5236?password=secret-password"},
+		{"dm", "dm://app:placeholder@localhost:5236?user=secret-password"},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			dir := writeConfig(t, "remote", "[connection]\nengine = \""+tc.engine+"\"\ndsn = \""+tc.dsn+"\"\nallow_actions = [\"query\"]\n")
+			_, err := Resolve(context.Background(), ResolveInput{ConfigPath: dir, Name: "remote", Action: action.Query})
+			if err == nil || strings.Contains(err.Error(), "secret-password") {
+				t.Fatalf("expected safe DSN format error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveAllowsSQLServerURLWithoutUserInformation(t *testing.T) {
+	dir := writeConfig(t, "remote", "[connection]\nengine = \"sqlserver\"\ndsn = \"sqlserver://localhost:1433?database=appdb\"\nallow_actions = [\"query\"]\n")
+	spec, err := Resolve(context.Background(), ResolveInput{ConfigPath: dir, Name: "remote", Action: action.Query})
+	if err != nil || spec.Driver != "sqlserver" {
+		t.Fatalf("spec=%#v, err=%v", spec, err)
+	}
+}
+
+func TestResolveExternalDriverPath(t *testing.T) {
+	dir := writeConfig(t, "remote", "[connection]\nengine='oracle'\nhost='localhost'\nuser='app'\ndatabase='FREEPDB1'\ndriver_path='drivers/oracle-2.0.0'\nallow_actions=['query']\n")
+	spec, err := Resolve(context.Background(), ResolveInput{ConfigPath: dir, Name: "remote", Action: action.Query})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "drivers", "oracle-2.0.0")
+	if spec.DriverPath != want {
+		t.Fatalf("DriverPath = %q, want %q", spec.DriverPath, want)
+	}
+}

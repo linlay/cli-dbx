@@ -1,0 +1,112 @@
+package link
+
+import (
+	"fmt"
+	"os"
+	"reflect"
+	"strings"
+	"unsafe"
+
+	"github.com/pkujhd/goloader/constants"
+)
+
+func registerType(t *_type, symPtr map[string]uintptr) {
+	if t.Kind() == reflect.Invalid {
+		panic("unexpected invalid kind during register type!")
+	}
+
+	name := constants.TypePrefix + resolveTypeName(t)
+	if _, ok := symPtr[name]; ok {
+		return
+	}
+	symPtr[name] = uintptr(unsafe.Pointer(t))
+
+	switch t.Kind() {
+	case reflect.Ptr, reflect.Chan, reflect.Array, reflect.Slice:
+		registerType(rtypeOf(t.Elem()), symPtr)
+	case reflect.Func:
+		for i := 0; i < t.NumIn(); i++ {
+			registerType(rtypeOf(t.In(i)), symPtr)
+		}
+		for i := 0; i < t.NumOut(); i++ {
+			registerType(rtypeOf(t.Out(i)), symPtr)
+		}
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			registerType(rtypeOf(t.Field(i).Type), symPtr)
+		}
+	case reflect.Map:
+		registerType(rtypeOf(t.Key()), symPtr)
+		registerType(rtypeOf(t.Elem()), symPtr)
+	case reflect.Bool,
+		reflect.Int, reflect.Uint,
+		reflect.Int64, reflect.Uint64,
+		reflect.Int32, reflect.Uint32,
+		reflect.Int16, reflect.Uint16,
+		reflect.Int8, reflect.Uint8,
+		reflect.Float64, reflect.Float32,
+		reflect.Complex64, reflect.Complex128,
+		reflect.String, reflect.UnsafePointer,
+		reflect.Uintptr,
+		reflect.Interface:
+		// Nothing to do
+	default:
+		panic(fmt.Sprintf("registerType found unexpected type (kind %s): ", t.Kind()))
+	}
+}
+
+func RegSymbol(symPtr map[string]uintptr) error {
+	path, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	err = regSymbol(symPtr, path, false)
+	addLinkName(symPtr)
+	typelinksRegister(symPtr)
+	regsiterItablinks(symPtr)
+	return err
+}
+
+func regSymbol(symPtr map[string]uintptr, path string, isIgnoreItab bool) error {
+	symbols, err := readExecutableSymbols(path)
+	if err != nil {
+		return err
+	}
+	for _, sym := range symbols {
+		if sym.Name == constants.OsStdout {
+			symPtr[sym.Name] = uintptr(sym.Addr)
+		}
+	}
+	//Address space layout randomization(ASLR)
+	//golang 1.15 symbol address has offset, before 1.15 offset is 0
+	addrOff := int64(uintptr(unsafe.Pointer(&os.Stdout))) - int64(symPtr[constants.OsStdout])
+	for _, sym := range symbols {
+		code := strings.ToUpper(string(sym.Code))
+		if code == "B" || code == "D" || code == "T" || code == "R" {
+			if !strings.HasPrefix(sym.Name, constants.DefaultPkgPath) && !isTypeName(sym.Name) {
+				if !(isItabName(sym.Name) && isIgnoreItab) {
+					symPtr[sym.Name] = uintptr(int64(sym.Addr) + addrOff)
+				}
+				if strings.HasSuffix(sym.Name, constants.FunctionWrapperSuffix) {
+					nName := strings.TrimSuffix(sym.Name, constants.FunctionWrapperSuffix)
+					if _, ok := symPtr[nName]; !ok {
+						symPtr[nName] = symPtr[sym.Name]
+					}
+				}
+			}
+		}
+	}
+
+	// if only abi symbols in runtime environment, set abi internal symbol same as abi0
+	for symName, ptr := range symPtr {
+		if strings.HasSuffix(symName, constants.ABI0_SUFFIX) {
+			nName := strings.TrimSuffix(symName, constants.ABI0_SUFFIX)
+			if _, ok := symPtr[nName]; !ok {
+				symPtr[nName] = ptr
+			}
+		}
+	}
+
+	registerTypeAssertInterfaceSwitchCache(symPtr)
+	return nil
+}

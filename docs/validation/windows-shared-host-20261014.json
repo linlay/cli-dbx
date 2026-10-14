@@ -1,0 +1,114 @@
+{
+  "date": "2026-10-14",
+  "branch": "codex/dbx-shared-host",
+  "version": "v0.2.0-shared-host.7",
+  "platform": "windows/amd64",
+  "toolchain": "go1.26.7",
+  "artifact_source": "Fresh component and Platform ZIP extraction per stage; source validation before commit. Rebuild after commit changes host identity and requires paired modules.",
+  "stages": [
+    {
+      "stage": 1,
+      "version": "v0.2.0-shared-host.4",
+      "main_passed": 223,
+      "extra_passed": 23,
+      "failed": 0,
+      "real_readonly_calls": 150,
+      "payload_bytes": 24777250,
+      "component_zip_bytes": 16639692,
+      "host_bytes": 13246464,
+      "modules": {
+        "dm": 3544037,
+        "oracle": 2932479,
+        "postgres": 3898289,
+        "sqlserver": 1154188
+      }
+    },
+    {
+      "stage": 2,
+      "version": "v0.2.0-shared-host.5",
+      "main_passed": 223,
+      "extra_passed": 23,
+      "failed": 0,
+      "real_readonly_calls": 150,
+      "payload_bytes": 20556980,
+      "component_zip_bytes": 12558848,
+      "host_bytes": 13022208,
+      "modules": {
+        "dm": 2451659,
+        "oracle": 1877279,
+        "postgres": 2347661,
+        "sqlserver": 856383
+      }
+    },
+    {
+      "stage": 3,
+      "version": "v0.2.0-shared-host.6",
+      "main_passed": 223,
+      "extra_passed": 26,
+      "failed": 0,
+      "real_readonly_calls": 150,
+      "payload_bytes": 20453212,
+      "component_zip_bytes": 12460028,
+      "host_bytes": 13022208,
+      "modules": {
+        "dm": 2408362,
+        "oracle": 1853924,
+        "postgres": 2323043,
+        "sqlserver": 843885
+      }
+    },
+    {
+      "stage": 4,
+      "version": "v0.2.0-shared-host.7",
+      "main_passed": 223,
+      "extra_passed": 26,
+      "failed": 0,
+      "real_readonly_calls": 150,
+      "payload_bytes": 20453212,
+      "component_zip_bytes": 12459979,
+      "host_bytes": 13022208,
+      "modules": {
+        "dm": 2408362,
+        "oracle": 1853924,
+        "postgres": 2323043,
+        "sqlserver": 843885
+      }
+    }
+  ],
+  "coverage": [
+    "SQLite, PostgreSQL 18.6, SQL Server 2025 Developer, Dameng DM8 business and safety cases",
+    "Exact numbers, binary, Unicode/BOM, ordered metadata, import/export, commit/rollback and affected-row guards",
+    "Each real external engine queried with only its own module installed",
+    "Three real engines: 50 read-only launches each with six concurrent workers, cancellation, parent death and recovery",
+    "Four vendor modules: offline full runtime-graph encode/decode equality, isolated initialization and repeated package byte equality",
+    "Canonical host rebuild equality, toolchain/platform checks and stable digest during packing",
+    "Root normal build/test and native PostgreSQL, Oracle, DM, SQL Server, ODBC module tests",
+    "Loader ordering, relative-host target copies, far CMP widths, zero-size symbols, conservative prelink and malformed-format tests"
+  ],
+  "fuzz": [
+    "FuzzDecode: 10 seconds, 755087 executions, passed",
+    "FuzzPclntableReferences: 10 seconds, passed"
+  ],
+  "generic_retention_experiments": {
+    "shipped": false,
+    "reason": "Full candidate repeated x/text plural registration on Windows. Reduced candidates passed initialization but increased installed size. Vendor/message/encoding code remains optional inside modules.",
+    "standard_library_only": {
+      "host_bytes": 13450752,
+      "module_bytes": {
+        "dm": 2276590,
+        "oracle": 1727647,
+        "postgres": 2209334,
+        "sqlserver": 831621
+      },
+      "payload_increase_bytes": 44522,
+      "component_zip_bytes_before_docs": 12227817
+    }
+  },
+  "limitations": [
+    "No live Oracle or MySQL server",
+    "ODBC native tests passed; no real vendor ODBC session",
+    "No macOS hardware: OS-thread JIT/signing adaptations not runtime-verified",
+    "Go internal ABI remains experimental; exact host SHA-256 required",
+    "Disk/ZIP sizes are not runtime memory measurements"
+  ]
+}

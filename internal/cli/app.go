@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,10 +20,12 @@ import (
 	"github.com/linlay/cli-dbx/internal/config"
 	"github.com/linlay/cli-dbx/internal/conn"
 	"github.com/linlay/cli-dbx/internal/db"
+	"github.com/linlay/cli-dbx/internal/driverprocess"
 	"github.com/linlay/cli-dbx/internal/output"
 	"github.com/linlay/cli-dbx/internal/secret"
 	"github.com/linlay/cli-dbx/internal/sqlanalyzer"
 	"github.com/linlay/cli-dbx/internal/sqlclass"
+	"github.com/linlay/cli-dbx/internal/textfile"
 )
 
 type App struct{}
@@ -270,6 +273,9 @@ func (a *App) runConn(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+	if err := output.ValidateFormat(flags.format); err != nil {
+		return err
+	}
 	profiles, _, err := config.List(flags.configPath)
 	if err != nil {
 		return a.renderError(flags.format, flags.verbose, conn.Spec{}, "", "", err)
@@ -351,6 +357,9 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 		}
 		return err
 	}
+	if err := output.ValidateFormat(common.format); err != nil {
+		return err
+	}
 	input, err := parseSQLInput(command, fs.Args())
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
@@ -363,7 +372,7 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, "", "", err)
 	}
-	analysis := sqlanalyzer.Analyze(text)
+	analysis := sqlanalyzer.AnalyzeForEngine(spec.Engine, text)
 	actualAction := action.FromClass(analysis.StatementClass)
 	reportedAction := actualAction
 	if expectedAction != "" {
@@ -429,7 +438,12 @@ func (a *App) runSQLCommand(ctx context.Context, command string, expectedAction 
 			Verbose:        common.verbose,
 		})
 	}
-	affected, err := db.ExecuteGuarded(ctx, spec, text, common.maxRows)
+	var affected int64
+	if actualAction == action.Admin {
+		affected, err = db.Execute(ctx, spec, text)
+	} else {
+		affected, err = db.ExecuteGuarded(ctx, spec, text, common.maxRows)
+	}
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, reportedAction, analysis.StatementClass, err)
 	}
@@ -465,6 +479,9 @@ func (a *App) runInspect(ctx context.Context, args []string) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return printHelp("inspect")
 		}
+		return err
+	}
+	if err := output.ValidateFormat(common.format); err != nil {
 		return err
 	}
 	connName, schema, table, err := parseInspectInput(args[0], fs.Args())
@@ -571,6 +588,11 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+	switch strings.ToLower(*fileFormat) {
+	case "csv", "json":
+	default:
+		return fmt.Errorf("unsupported export format %q", *fileFormat)
+	}
 	table, connName, outPath, err := parseExportInput(fs.Args())
 	if err != nil {
 		return a.renderError("json", *verbose, conn.Spec{}, "", "", err)
@@ -585,7 +607,11 @@ func (a *App) runExport(ctx context.Context, args []string) error {
 	if err := enforceTablePolicy(spec, []string{table}); err != nil {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
 	}
-	query := fmt.Sprintf("select * from %s", quoteExportTable(spec.Engine, table))
+	quotedTable, err := quoteExportTable(spec.Engine, table)
+	if err != nil {
+		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
+	}
+	query := fmt.Sprintf("select * from %s", quotedTable)
 	result, err := db.Query(ctx, spec, query, 0, *limit)
 	if err != nil {
 		return a.renderError("json", *verbose, spec, action.Query, sqlclass.ClassRead, err)
@@ -629,6 +655,9 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+	if err := output.ValidateFormat(common.format); err != nil {
+		return err
+	}
 	path, connName, into, err := parseImportInput(fs.Args())
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
@@ -663,7 +692,7 @@ func (a *App) runImport(ctx context.Context, args []string) error {
 			Verbose: common.verbose,
 		})
 	}
-	count, err := db.ImportRows(ctx, spec, into, columns, rows)
+	count, err := db.ImportRows(ctx, spec, into, columns, rows, common.maxRows)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, spec, action.Update, sqlclass.ClassWriteData, err)
 	}
@@ -705,6 +734,9 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 		}
 		return err
 	}
+	if err := output.ValidateFormat(common.format); err != nil {
+		return err
+	}
 	input, err := parseTxInput(fs.Args(), *planPath)
 	if err != nil {
 		return a.renderError(common.format, common.verbose, conn.Spec{}, "", "", err)
@@ -721,7 +753,7 @@ func (a *App) runTx(ctx context.Context, args []string) error {
 		if step.Action != action.Query && step.Action != action.Update {
 			return a.renderError(common.format, common.verbose, spec, step.Action, "", fmt.Errorf("transaction action %s is not supported", step.Action))
 		}
-		analysis := sqlanalyzer.Analyze(step.SQL)
+		analysis := sqlanalyzer.AnalyzeForEngine(spec.Engine, step.SQL)
 		if err := enforcePolicy(spec, analysis, step.Action); err != nil {
 			return a.renderError(common.format, common.verbose, spec, step.Action, analysis.StatementClass, err)
 		}
@@ -839,7 +871,7 @@ func readSQL(command, inline, path string) (string, error) {
 	case inline != "":
 		return inline, nil
 	case path != "":
-		buf, err := os.ReadFile(path)
+		buf, err := textfile.ReadFile(path)
 		return string(buf), err
 	default:
 		return "", fmt.Errorf("%s requires SQL text or: %s file <conn> <path>", command, command)
@@ -853,9 +885,16 @@ func readTxPlan(path string) (db.TxPlan, error) {
 	}
 	defer file.Close()
 	var plan db.TxPlan
-	decoder := json.NewDecoder(file)
+	decoder := json.NewDecoder(textfile.Reader(file))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&plan); err != nil {
+		return db.TxPlan{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = errors.New("transaction plan must contain a single JSON document")
+		}
 		return db.TxPlan{}, err
 	}
 	if len(plan.Steps) == 0 {
@@ -899,13 +938,30 @@ func txResultData(result db.TxRunResult) map[string]any {
 func readImportFile(path string) ([]string, []map[string]any, error) {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":
-		buf, err := os.ReadFile(path)
+		buf, err := textfile.ReadFile(path)
 		if err != nil {
 			return nil, nil, err
 		}
 		var rows []map[string]any
-		if err := json.Unmarshal(buf, &rows); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(string(buf)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&rows); err != nil {
 			return nil, nil, err
+		}
+		// Decode only reads one value; preserve Unmarshal's whole-document check.
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				err = errors.New("import file must contain a single JSON document")
+			}
+			return nil, nil, err
+		}
+		for _, row := range rows {
+			for key, value := range row {
+				if number, ok := value.(json.Number); ok {
+					row[key] = importNumber(number)
+				}
+			}
 		}
 		columns := orderedKeys(rows)
 		return columns, rows, nil
@@ -915,7 +971,7 @@ func readImportFile(path string) ([]string, []map[string]any, error) {
 			return nil, nil, err
 		}
 		defer file.Close()
-		reader := csv.NewReader(file)
+		reader := csv.NewReader(textfile.Reader(file))
 		records, err := reader.ReadAll()
 		if err != nil {
 			return nil, nil, err
@@ -942,6 +998,21 @@ func readImportFile(path string) ([]string, []map[string]any, error) {
 	}
 }
 
+func importNumber(number json.Number) any {
+	if integer, err := number.Int64(); err == nil {
+		return integer
+	}
+	text := number.String()
+	// Only use float64 for ordinary decimals that round-trip unchanged.
+	// Out-of-range integers and higher precision numbers bind as exact text.
+	if strings.ContainsAny(text, ".eE") {
+		if value, err := number.Float64(); err == nil && strconv.FormatFloat(value, 'g', -1, 64) == text {
+			return value
+		}
+	}
+	return text
+}
+
 func orderedKeys(rows []map[string]any) []string {
 	if len(rows) == 0 {
 		return nil
@@ -953,26 +1024,19 @@ func orderedKeys(rows []map[string]any) []string {
 	return keys
 }
 
-func quoteExportTable(engine, table string) string {
-	switch engine {
-	case "mysql":
-		return "`" + strings.ReplaceAll(table, "`", "``") + "`"
-	default:
-		return `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
-	}
+func quoteExportTable(engine, table string) (string, error) {
+	return db.QuoteTable(engine, table)
 }
 
 func redactDSN(spec conn.Spec) string {
+	if spec.Driver == "odbc" {
+		return "[redacted connection]"
+	}
 	if spec.Engine == "sqlite" {
 		return spec.DSN
 	}
-	// PostgreSQL URL format: scheme://user:password@host/...
-	if spec.Engine == "postgres" {
-		if idx := strings.Index(spec.DSN, "@"); idx >= 0 {
-			if start := strings.Index(spec.DSN, "://"); start >= 0 {
-				return spec.DSN[:start+3] + "***:***" + spec.DSN[idx:]
-			}
-		}
+	if spec.Engine == "postgres" && !strings.HasPrefix(strings.ToLower(spec.DSN), "postgres://") && !strings.HasPrefix(strings.ToLower(spec.DSN), "postgresql://") {
+		return "[redacted connection]"
 	}
 	// MySQL DSN format: user:password@protocol(host)/... Passwords may contain @.
 	if spec.Engine == "mysql" {
@@ -983,14 +1047,51 @@ func redactDSN(spec conn.Spec) string {
 			}
 		}
 	}
-	if idx := strings.Index(spec.DSN, "@"); idx >= 0 {
+	if spec.Engine == "dm" {
+		// The DM driver treats the final '?' and '@' as delimiters, even if
+		// the raw password contains either character.
+		end := strings.LastIndex(spec.DSN, "?")
+		if end < 0 {
+			end = len(spec.DSN)
+		}
 		if start := strings.Index(spec.DSN, "://"); start >= 0 {
-			return spec.DSN[:start+3] + "***:***" + spec.DSN[idx:]
+			if at := strings.LastIndex(spec.DSN[:end], "@"); at > start {
+				return spec.DSN[:start+3] + "***:***" + spec.DSN[at:]
+			}
 		}
-		prefix := spec.DSN[:idx]
-		if colon := strings.LastIndex(prefix, ":"); colon >= 0 {
-			return spec.DSN[:colon+1] + "***" + spec.DSN[idx:]
+	}
+	if spec.Engine == "postgres" {
+		if parsed, err := url.Parse(spec.DSN); err == nil {
+			for key := range parsed.Query() {
+				if strings.EqualFold(key, "password") {
+					return "[redacted connection]"
+				}
+			}
 		}
+	}
+	if spec.Engine == "sqlserver" {
+		parsed, err := url.Parse(spec.DSN)
+		if err != nil {
+			return "[redacted connection]"
+		}
+		query, err := url.ParseQuery(parsed.RawQuery)
+		if err != nil {
+			return "[redacted connection]"
+		}
+		for key := range query {
+			if isSQLServerPasswordKey(key) {
+				query[key] = []string{"***"}
+			}
+		}
+		parsed.RawQuery = query.Encode()
+		if parsed.User != nil {
+			parsed.User = url.UserPassword("***", "***")
+		}
+		return parsed.String()
+	}
+	if parsed, err := url.Parse(spec.DSN); err == nil && parsed.User != nil {
+		parsed.User = url.UserPassword("***", "***")
+		return parsed.String()
 	}
 	return spec.DSN
 }
@@ -1032,6 +1133,13 @@ func nextForClass(class sqlclass.StatementClass, more bool) string {
 }
 
 func classifyErrorCode(err error) string {
+	var driverErr *driverprocess.Error
+	if errors.As(err, &driverErr) && driverErr.Code != "database_error" {
+		switch driverErr.Code {
+		case "driver_missing", "driver_invalid", "driver_integrity_failed", "driver_protocol_mismatch", "driver_start_failed", "driver_protocol_error", "driver_process_failed":
+			return driverErr.Code
+		}
+	}
 	switch {
 	case errors.Is(err, secret.ErrSecretStoreUnavailable):
 		return "secret_store_unavailable"
@@ -1073,6 +1181,12 @@ func classifyErrorCode(err error) string {
 
 func hintForCode(code string) string {
 	switch code {
+	case "driver_missing":
+		return "Extract the matching driver package and set connection.driver_path to its executable or supported .dbmod; keep the matching .json beside it."
+	case "driver_invalid", "driver_integrity_failed", "driver_protocol_mismatch":
+		return "Check the installed driver package, manifest, platform, and checksum; reinstall the matching package if needed."
+	case "driver_start_failed", "driver_protocol_error", "driver_process_failed":
+		return "Check the installed driver executable and its package; verify database state before retrying a write."
 	case "conn_not_found":
 		return "Run dbx conn list or use a valid connection name."
 	case "no_connection":
@@ -1110,6 +1224,10 @@ func hintForCode(code string) string {
 
 func nextForCode(code string) string {
 	switch code {
+	case "driver_missing":
+		return "install_driver"
+	case "driver_invalid", "driver_integrity_failed", "driver_protocol_mismatch", "driver_start_failed", "driver_protocol_error", "driver_process_failed":
+		return "check_driver"
 	case "conn_not_found", "no_connection":
 		return "inspect_connection"
 	case "multiple_statements_blocked", "unknown_statement":
@@ -1133,6 +1251,20 @@ func nextForCode(code string) string {
 
 func summaryForError(code string) string {
 	switch code {
+	case "driver_missing":
+		return "database driver is not installed"
+	case "driver_invalid":
+		return "installed database driver package is invalid"
+	case "driver_integrity_failed":
+		return "database driver checksum verification failed"
+	case "driver_protocol_mismatch":
+		return "database driver protocol does not match DBX"
+	case "driver_start_failed":
+		return "database driver could not start"
+	case "driver_protocol_error":
+		return "database driver returned an invalid response"
+	case "driver_process_failed":
+		return "database driver process failed"
 	case "conn_not_found":
 		return "connection target not found"
 	case "no_connection":
@@ -1186,6 +1318,15 @@ func (a *App) renderError(format string, verbose bool, spec conn.Spec, act actio
 	if err != nil {
 		env.Warnings = []string{sanitizeError(err, spec)}
 	}
+	if strings.HasPrefix(code, "driver_") {
+		data := map[string]any{"engine": spec.Engine}
+		if spec.DriverPath != "" {
+			data["driver_path"] = spec.DriverPath
+		} else if spec.DriverDir != "" {
+			data["driver_dir"] = spec.DriverDir
+		}
+		env.Data = data
+	}
 	env.Warnings = append(env.Warnings, spec.Warnings...)
 	if printErr := output.PrintEnvelope(format, env); printErr != nil {
 		return printErr
@@ -1198,20 +1339,82 @@ func sanitizeError(err error, spec conn.Spec) string {
 		return ""
 	}
 	message := err.Error()
+	if spec.Driver == "odbc" {
+		var driverErr *driverprocess.Error
+		if errors.As(err, &driverErr) {
+			switch driverErr.Code {
+			case "driver_missing", "driver_invalid", "driver_integrity_failed", "driver_protocol_mismatch", "driver_start_failed":
+				return message
+			}
+		}
+		redacted := "ODBC driver error details redacted; check the connection and driver installation"
+		if strings.Contains(message, "verify database state before retrying a write") {
+			redacted += "; verify database state before retrying a write"
+		}
+		return redacted
+	}
 	if spec.DSN == "" || spec.Engine == "sqlite" {
 		return message
 	}
+	if (spec.Engine == "postgres" || spec.Engine == "sqlserver") && redactDSN(spec) == "[redacted connection]" {
+		engineName := "PostgreSQL"
+		if spec.Engine == "sqlserver" {
+			engineName = "SQL Server"
+		}
+		redacted := engineName + " driver error details redacted; check the connection and driver installation"
+		const uncertainWrite = "verify database state before retrying a write"
+		if strings.Contains(message, uncertainWrite) {
+			redacted += "; " + uncertainWrite
+		}
+		return redacted
+	}
 	message = strings.ReplaceAll(message, spec.DSN, redactDSN(spec))
-	if password := passwordFromDSN(spec.Engine, spec.DSN); password != "" {
-		message = strings.ReplaceAll(message, password, "***")
-		message = strings.ReplaceAll(message, url.QueryEscape(password), "***")
+	passwords := []string{passwordFromDSN(spec.Engine, spec.DSN)}
+	if spec.Engine == "sqlserver" {
+		if parsed, err := url.Parse(spec.DSN); err == nil {
+			for key, values := range parsed.Query() {
+				if isSQLServerPasswordKey(key) {
+					passwords = append(passwords, values...)
+				}
+			}
+		}
+	}
+	var variants []string
+	for _, password := range passwords {
+		if password == "" {
+			continue
+		}
+		for _, variant := range []string{url.UserPassword("user", password).String(), url.PathEscape(password), url.QueryEscape(password), password} {
+			if variant == "" {
+				continue
+			}
+			if colon := strings.Index(variant, ":"); strings.HasPrefix(variant, "user:") && colon >= 0 {
+				variant = variant[colon+1:]
+			}
+			variants = append(variants, variant)
+		}
+	}
+	// Replace longer secrets first so overlapping old/new passwords cannot
+	// leave a suffix behind when a shorter password is replaced.
+	sort.Slice(variants, func(i, j int) bool { return len(variants[i]) > len(variants[j]) })
+	for _, variant := range variants {
+		message = strings.ReplaceAll(message, variant, "***")
 	}
 	return message
 }
 
+func isSQLServerPasswordKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "password", "pwd", "change password":
+		return true
+	default:
+		return false
+	}
+}
+
 func passwordFromDSN(engine, dsn string) string {
 	switch engine {
-	case "postgres":
+	case "postgres", "oracle", "sqlserver":
 		parsed, err := url.Parse(dsn)
 		if err == nil && parsed.User != nil {
 			password, _ := parsed.User.Password()
@@ -1221,6 +1424,18 @@ func passwordFromDSN(engine, dsn string) string {
 		if at := strings.LastIndex(dsn, "@"); at > 0 {
 			if colon := strings.Index(dsn[:at], ":"); colon >= 0 {
 				return dsn[colon+1 : at]
+			}
+		}
+	case "dm":
+		end := strings.LastIndex(dsn, "?")
+		if end < 0 {
+			end = len(dsn)
+		}
+		if start := strings.Index(dsn, "://"); start >= 0 {
+			if at := strings.LastIndex(dsn[:end], "@"); at > start {
+				if colon := strings.Index(dsn[start+3:at], ":"); colon >= 0 {
+					return dsn[start+3+colon+1 : at]
+				}
 			}
 		}
 	}

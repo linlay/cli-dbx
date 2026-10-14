@@ -39,6 +39,7 @@ func newConnCommand() *cobra.Command {
 		Long: strings.TrimSpace(`
 Use conn to list configured targets, inspect one target, or verify that a
 connection can be reached before inspect or query.
+MySQL/SQLite are built in; PostgreSQL/Oracle/DM/SQL Server require installed drivers.
 `),
 		UsageLines: []string{
 			"dbx conn [command]",
@@ -128,7 +129,7 @@ func newInspectSchemaCommand(flags *connFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:        "schema <conn> [schema]",
 		Short:      "List schemas, tables, and relations",
-		Long:       "List schemas, tables, and relations for one connection.",
+		Long:       "List schemas, tables, and relations for one connection.\nComposite foreign-key columns are paired in definition order.\nDM lists visible schemas through ALL_OBJECTS; privileged SYS.SYSOBJECTS access is not required.",
 		UsageLines: []string{"dbx inspect schema <conn> [schema]"},
 		ArgFields: []cobra.HelpField{
 			helpField("conn", "string", true, "Connection name defined in config."),
@@ -150,7 +151,7 @@ func newInspectTableCommand(flags *connFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:        "table <conn> <table> [schema]",
 		Short:      "Describe one table",
-		Long:       "Describe one table, including columns, keys, and relations.",
+		Long:       "Describe one table, including columns, keys, and relations.\nComposite key columns retain definition order and foreign-key column pairing.",
 		UsageLines: []string{"dbx inspect table <conn> <table> [schema]"},
 		ArgFields: []cobra.HelpField{
 			helpField("conn", "string", true, "Connection name defined in config."),
@@ -196,7 +197,7 @@ func newSQLCommand(name, short, longHelp, example string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     name + " <conn> <sql>",
 		Short:   short,
-		Long:    longHelp,
+		Long:    longHelp + "\n\nSQL files accept UTF-8 with or without BOM.\nMySQL/SQLite are built in; PostgreSQL/Oracle/DM/SQL Server require installed drivers.\nSelect a versioned executable with connection.driver_path; its manifest is <executable>.json.\nFlat unversioned default root: connection.driver_dir > DBX_DRIVER_DIR > ~/.config/dbx/drivers.",
 		Example: example,
 		UsageLines: []string{
 			fmt.Sprintf("dbx %s <conn> <sql>", name),
@@ -235,8 +236,12 @@ func newTxCommand() *cobra.Command {
 		Long: strings.TrimSpace(`
 Use tx when multiple reads and writes must commit together.
 
-Only query and update steps are allowed in a transaction plan. Any failure rolls
-the entire transaction back.
+Only query and update steps are allowed in a transaction plan. A failed step rolls
+the entire transaction back. A connection loss during commit can leave the outcome
+unknown; verify with a read-only query before retrying. External writes are not retried automatically.
+
+The plan must be one UTF-8 JSON document, with or without BOM. Unknown fields,
+trailing JSON documents and trailing non-whitespace content are rejected before execution.
 `),
 		UsageLines: []string{
 			"dbx tx <conn> --plan <path.json>",
@@ -272,7 +277,7 @@ func newImportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import file <path> <conn> <table>",
 		Short: "Load CSV or JSON rows into a table",
-		Long:  "Use import to load CSV or JSON files into one table.",
+		Long:  "Use import to load UTF-8 CSV or JSON files, with or without BOM, into one table.\nJSON input must contain one document. Integers within int64 are preserved exactly;\nlarger integers and high precision numbers bind as exact text, subject to the target column type.\nDM native drivers preserve decimal text during parameter conversion.",
 		UsageLines: []string{
 			"dbx import file <path> <conn> <table>",
 		},

@@ -1,0 +1,11 @@
+# Copy to a private connection file; run dbx secret encrypt and add its password line.
+[connection]
+# Independent Go driver; add .exe on Windows. For ODBC, see config.odbc.toml.
+engine = "oracle"
+driver_path = "~/.config/dbx/drivers/dbx-driver-oracle-0.2.0-driver-process.3"
+host = "127.0.0.1"
+port = 1521
+user = "app"
+database = "ORCLPDB1"
+schema = "APP"
+allow_actions = ["query"]

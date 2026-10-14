@@ -31,3 +31,24 @@ func TestHasUnsafeWrite(t *testing.T) {
 		t.Fatal("expected WITH DELETE without WHERE to be unsafe")
 	}
 }
+
+func TestClassifySelectInto(t *testing.T) {
+	for _, sql := range []string{
+		"select id into archived_users from users",
+		"select id into temp table #archived_users from users",
+		"with source as (select id from users) select id into archived_users from source",
+	} {
+		if got := Classify(sql); got != ClassDDL {
+			t.Errorf("%q => %s, want ddl", sql, got)
+		}
+	}
+	for _, sql := range []string{
+		"select 'into' as label from users",
+		"select 'words into a string' as label from users",
+		"select id /* into archive */ from users",
+	} {
+		if got := Classify(sql); got != ClassRead {
+			t.Errorf("%q => %s, want read", sql, got)
+		}
+	}
+}

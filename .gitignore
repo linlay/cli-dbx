@@ -1,3 +1,28 @@
 .DS_Store
-dist/
-dbx
+.idea/
+/dist/
+/dbx
+/dbx.exe
+/examples/**/verification/
+
+# Local release downloads and their generated inventories.
+/driver-downloads/
+
+# Local development plans and historical manual-test materials.
+/docs/superpowers/
+/examples/manual-test-2026-10-03/
+/examples/manual-test-2026-10-03-fixes/
+/docs/cli-dbx修复验证报告-2026-10-03.md
+/docs/cli-dbx全量测试报告-2026-10-03.md
+/docs/windows-codex-test-handoff-2026-10-06.md
+/docs/数据库连接器技术选型.md
+/docs/数据库连接手动测试手册.md
+/docs/数据库连接手动测试手册-2026-10-03-独立驱动版.md
+/docs/数据库连接手动测试手册-2026-10-03-修复回归补充.md
+/docs/validation/windows-shared-host-20261013.json
+
+# Superseded embedded-ODBC documentation; current guide: docs/odbc-driver-process.md.
+/docs/odbc.md
+/docs/odbc-installation-macos.md
+
+__pycache__/

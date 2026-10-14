@@ -1,0 +1,13 @@
+# PostgreSQL connection example.
+# Replace the endpoint, port, user, database and SSL mode with the instance's values.
+# Run dbx secret encrypt and add the generated password line once.
+# Install the platform-matching driver and its manifest; add .exe on Windows.
+[connection]
+engine = "postgres"
+driver_path = "~/.config/dbx/drivers/dbx-driver-postgres-0.2.0-driver-process.3"
+host = "127.0.0.1"
+port = 5432
+user = "app"
+database = "appdb"
+sslmode = "require"
+allow_actions = ["query"]

@@ -3,5 +3,5 @@
   "name": "dbx",
   "type": "cli",
   "auth_mode": null,
-  "description": "Platform bundled dbx CLI"
+  "description": "Platform bundled dbx CLI with MySQL/SQLite; external PostgreSQL/Oracle/DM/SQL Server drivers"
 }

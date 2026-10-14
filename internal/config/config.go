@@ -13,6 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/linlay/cli-dbx/internal/action"
 	"github.com/linlay/cli-dbx/internal/secret"
+	"github.com/linlay/cli-dbx/internal/textfile"
 )
 
 const (
@@ -31,23 +32,28 @@ type fileConfig struct {
 }
 
 type ConnectionConfig struct {
-	Engine       string      `toml:"engine"`
-	DSN          string      `toml:"dsn"`
-	DSNEnv       string      `toml:"dsn_env"`
-	Host         string      `toml:"host"`
-	Port         int         `toml:"port"`
-	User         string      `toml:"user"`
-	Password     ValueSource `toml:"password"`
-	Database     string      `toml:"database"`
-	Schema       string      `toml:"schema"`
-	Path         string      `toml:"path"`
-	SSLMode      string      `toml:"sslmode"`
-	ReadOnly     bool        `toml:"readonly"`
-	Timeout      string      `toml:"timeout"`
-	Role         string      `toml:"role"`
-	Tags         []string    `toml:"tags"`
-	AllowActions []string    `toml:"allow_actions"`
-	AllowTables  []string    `toml:"allow_tables"`
+	Engine       string            `toml:"engine"`
+	Driver       string            `toml:"driver"`
+	DSN          string            `toml:"dsn"`
+	DSNEnv       string            `toml:"dsn_env"`
+	Host         string            `toml:"host"`
+	Port         int               `toml:"port"`
+	User         string            `toml:"user"`
+	Password     ValueSource       `toml:"password"`
+	Database     string            `toml:"database"`
+	Schema       string            `toml:"schema"`
+	Path         string            `toml:"path"`
+	SSLMode      string            `toml:"sslmode"`
+	DriverDir    string            `toml:"driver_dir"`
+	DriverPath   string            `toml:"driver_path"`
+	ODBCDriver   string            `toml:"odbc_driver"`
+	ODBCOptions  map[string]string `toml:"odbc_options"`
+	ReadOnly     bool              `toml:"readonly"`
+	Timeout      string            `toml:"timeout"`
+	Role         string            `toml:"role"`
+	Tags         []string          `toml:"tags"`
+	AllowActions []string          `toml:"allow_actions"`
+	AllowTables  []string          `toml:"allow_tables"`
 }
 
 type ValueSource struct {
@@ -316,7 +322,7 @@ func detectPathKind(path string) (string, bool, error) {
 }
 
 func loadFile(path string) (Profile, error) {
-	buf, err := os.ReadFile(path)
+	buf, err := textfile.ReadFile(path)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -368,6 +374,14 @@ func legacyFormatError(path string) error {
 
 func (c *ConnectionConfig) normalizePaths(baseDir string) error {
 	var err error
+	c.DriverPath, err = resolveResourcePath(baseDir, c.DriverPath, false)
+	if err != nil {
+		return err
+	}
+	c.ODBCDriver, err = resolveResourcePath(baseDir, c.ODBCDriver, false)
+	if err != nil {
+		return err
+	}
 	c.Path, err = resolveResourcePath(baseDir, c.Path, true)
 	if err != nil {
 		return err
@@ -383,7 +397,7 @@ func resolveResourcePath(baseDir, value string, allowSQLiteSpecial bool) (string
 	if value == "" {
 		return "", nil
 	}
-	if allowSQLiteSpecial && (value == ":memory:" || strings.HasPrefix(value, "sqlite:") || strings.HasPrefix(value, "file:")) {
+	if allowSQLiteSpecial && (value == ":memory:" || strings.HasPrefix(value, ":memory:?") || strings.HasPrefix(value, "sqlite:") || strings.HasPrefix(value, "file:")) {
 		return value, nil
 	}
 	expanded, err := expandHome(value)

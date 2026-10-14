@@ -22,12 +22,22 @@ Use:
   secret    encrypt passwords for config files
   version   show build version
 
+Drivers:
+  MySQL and SQLite are built in.
+  PostgreSQL, Oracle, DM, and SQL Server require separately installed drivers.
+  Select a versioned executable with connection.driver_path; its manifest is <executable>.json.
+  Flat unversioned default root: connection.driver_dir > DBX_DRIVER_DIR > ~/.config/dbx/drivers.
+  Oracle/DM/SQL Server also support driver = "odbc" with driver_path and odbc_driver.
+  Drivers are verified before launch; no PATH lookup or automatic download.
+
 Flow:
   1. dbx conn test <name>
   2. dbx inspect table <name> <table>
   3. dbx query <name> 'select ...'
   Config files live in ~/.config/dbx/<name>.toml by default.
   AP_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
+  Config, SQL, transaction JSON, CSV and JSON files accept UTF-8 with or without BOM.
+  SQLite filesystem paths preserve spaces, Unicode, # and literal percent signs.
 
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100
@@ -41,6 +51,7 @@ func helpExamples() string {
 	return `Examples
 
 PostgreSQL: inspect users
+  Install the independent postgres driver first.
   dbx conn test local-pg
   dbx inspect table local-pg users
   dbx query local-pg 'select id, email from users limit 10'
@@ -65,6 +76,7 @@ func connHelp() string {
 
 When to use:
   Check a target before inspect or query.
+  MySQL/SQLite are built in; PostgreSQL/Oracle/DM/SQL Server require drivers.
 
 Commands:
   list
@@ -86,6 +98,8 @@ func inspectHelp() string {
 
 When to use:
   Look at schema, keys, and relations before writing SQL.
+  Composite key columns retain definition order and foreign-key column pairing.
+  DM lists visible schemas through ALL_OBJECTS without SYS.SYSOBJECTS access.
 
 Commands:
   schema
@@ -115,8 +129,14 @@ Minimum:
 
 Facts:
   DBX maps each statement to an action and checks allow_actions and allow_tables.
+  MySQL/SQLite are built in; PostgreSQL/Oracle/DM/SQL Server require drivers.
+  Select a versioned executable with connection.driver_path; its manifest is <executable>.json.
+  Flat unversioned default root: connection.driver_dir > DBX_DRIVER_DIR > ~/.config/dbx/drivers.
   Read results return up to 100 rows by default.
+  Duplicate result names get unique suffixes such as id_2; use SQL aliases for stable names.
   Multiple statements are blocked by default.
+  SQL files accept UTF-8 with or without BOM.
+  Unsupported output formats are rejected before execution.
   Keep the same order by when you continue with --cursor.
 
 Options:
@@ -148,7 +168,7 @@ func joinHelpExamples(examples []string) string {
 }
 
 func queryHelp() string {
-	return sqlCommandHelp("query", "Run read-only SQL.", []string{
+	return sqlCommandHelp("query", "Run read-only SQL.\n  Write CTEs and EXPLAIN of writes are rejected; setting PRAGMA requires admin.", []string{
 		"dbx query local-pg 'select * from users order by id'",
 		"dbx query local-pg 'select * from users order by id' --cursor 100",
 		"dbx query dsn postgres 'postgres://app:secret@127.0.0.1:5432/appdb?sslmode=disable' 'select now()'",
@@ -156,7 +176,7 @@ func queryHelp() string {
 }
 
 func updateHelp() string {
-	return sqlCommandHelp("update", "Run insert, update, delete, or merge SQL.", []string{
+	return sqlCommandHelp("update", "Run insert, update, delete, or merge SQL.\n  UPDATE/DELETE require WHERE on the outer statement.", []string{
 		"dbx update local-pg 'update users set active = 1 where id = 1'",
 		"dbx update local-pg 'delete from users where archived = 1'",
 		"dbx update file local-pg ./change.sql",
@@ -172,7 +192,7 @@ func schemaHelp() string {
 }
 
 func adminHelp() string {
-	return sqlCommandHelp("admin", "Run supported admin SQL such as grant, revoke, set, or vacuum.", []string{
+	return sqlCommandHelp("admin", "Run supported admin SQL such as grant, revoke, set, or vacuum.\n  Runs without a DBX transaction; --max-rows-affected does not apply.", []string{
 		"dbx admin local-pg 'analyze users'",
 		"dbx admin local-sqlite 'vacuum'",
 		"dbx admin file local-pg ./admin.sql",
@@ -190,8 +210,11 @@ Minimum:
 
 Facts:
   tx only accepts query and update steps.
+  Plans accept UTF-8 with or without BOM and must contain exactly one JSON document.
+  Unknown fields and trailing non-whitespace content are rejected before execution.
   Every step runs on one connection inside one transaction.
-  Any failure rolls the whole transaction back.
+  A failed step rolls the whole transaction back.
+  A connection loss during commit can leave the outcome unknown; verify before retrying.
   Use tx when a sequence of reads and writes must commit together.
 
 Example plan:
@@ -212,6 +235,14 @@ func importHelp() string {
 When to use:
   Load csv or json rows into a table.
 
+Facts:
+  CSV and JSON input files accept UTF-8 with or without BOM.
+  JSON input must contain exactly one document.
+  JSON integers within int64 are preserved exactly.
+  Larger integers and high precision numbers bind as exact text; column conversion follows the database.
+  DM native drivers preserve decimal text during parameter conversion.
+  --format accepts json or table and is validated before import.
+
 Example:
   dbx import file ./customers.csv local-mysql customers
 
@@ -225,6 +256,7 @@ func exportHelp() string {
 
 When to use:
   Write a table to csv or json.
+  The file format is validated before creating or truncating the output file.
 
 Options:
   --format <csv|json>           export file format; default csv

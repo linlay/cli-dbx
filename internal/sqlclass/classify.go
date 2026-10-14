@@ -2,7 +2,8 @@ package sqlclass
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/linlay/cli-dbx/internal/sqllex"
 )
 
 type StatementClass string
@@ -16,32 +17,100 @@ const (
 )
 
 func Classify(sql string) StatementClass {
-	s := firstStatement(stripComments(sql))
-	if s == "" {
+	tokens, err := sqllex.Scan(sql)
+	if err != nil {
 		return ClassUnknown
 	}
-	token := leadingToken(s)
-	if token == "with" {
-		token = classifyWithToken(s)
-	}
-	return classifyToken(token)
+	return classify(sqllex.First(tokens))
 }
-
+func classify(tokens []sqllex.Token) StatementClass {
+	if len(tokens) == 0 {
+		return ClassUnknown
+	}
+	outer, ctes, _, ok := sqllex.With(tokens)
+	if !ok {
+		return ClassUnknown
+	}
+	for _, cte := range ctes {
+		if classify(cte.Body) != ClassRead {
+			return ClassUnknown
+		}
+	}
+	if len(outer) == 0 || outer[0].Kind != sqllex.Word {
+		return ClassUnknown
+	}
+	switch strings.ToLower(outer[0].Text) {
+	case "select":
+		if sqllex.HasTop(outer, "into") {
+			return ClassDDL
+		}
+		return ClassRead
+	case "with":
+		return ClassUnknown
+	case "explain":
+		// EXPLAIN options vary by dialect. Only a verified read-only body is admitted,
+		// including ANALYZE, which can execute the body rather than just plan it.
+		for i := 1; i < len(outer); i++ {
+			t := outer[i]
+			if t.Depth != outer[0].Depth {
+				continue
+			}
+			if t.Is("select") || t.Is("with") || t.Is("values") {
+				if classify(outer[i:]) == ClassRead {
+					return ClassRead
+				}
+				return ClassUnknown
+			}
+			if classifyToken(strings.ToLower(t.Text)) != ClassUnknown && !t.Is("analyze") {
+				return ClassUnknown
+			}
+		}
+		return ClassUnknown
+	case "pragma":
+		return classifyPragma(outer)
+	default:
+		return classifyToken(strings.ToLower(outer[0].Text))
+	}
+}
+func classifyPragma(tokens []sqllex.Token) StatementClass {
+	if len(tokens) < 2 || !tokens[1].Ident() {
+		return ClassUnknown
+	}
+	i := 1
+	if len(tokens) > 3 && tokens[2].Text == "." {
+		i = 3
+	}
+	name := strings.ToLower(tokens[i].Text)
+	// Argument-bearing metadata pragmas are read-only; other argument/assignment
+	// forms may change database or connection state and require admin.
+	switch name {
+	case "table_info", "table_xinfo", "index_info", "index_xinfo", "index_list", "foreign_key_list", "table_list", "foreign_key_check", "integrity_check", "quick_check":
+		return ClassRead
+	}
+	if i+1 < len(tokens) {
+		return ClassAdmin
+	}
+	switch name {
+	case "user_version", "application_id", "schema_version", "data_version", "database_list", "compile_options", "collation_list", "function_list", "module_list", "pragma_list", "foreign_keys", "journal_mode", "synchronous", "cache_size", "page_size", "page_count", "freelist_count", "encoding", "auto_vacuum", "busy_timeout", "query_only", "read_uncommitted", "recursive_triggers", "secure_delete", "temp_store", "locking_mode", "mmap_size", "wal_autocheckpoint", "defer_foreign_keys", "ignore_check_constraints", "legacy_alter_table", "analysis_limit":
+		return ClassRead
+	default:
+		return ClassAdmin
+	}
+}
 func HasUnsafeWrite(sql string) bool {
-	s := firstStatement(stripComments(sql))
-	token := leadingToken(s)
-	if token == "with" {
-		token = classifyWithToken(s)
+	tokens, err := sqllex.Scan(sql)
+	if err != nil {
+		return true
 	}
-	if token != "update" && token != "delete" {
-		return false
+	outer, _, _, ok := sqllex.With(sqllex.First(tokens))
+	if !ok {
+		return true
 	}
-	return !strings.Contains(" "+strings.ToLower(s)+" ", " where ")
+	return len(outer) > 0 && (outer[0].Is("update") || outer[0].Is("delete")) && !sqllex.HasTop(outer, "where")
 }
-
 func classifyToken(token string) StatementClass {
 	switch token {
-	case "select", "show", "describe", "desc", "pragma", "explain":
+	case "select", "values", "show", "describe", "desc":
 		return ClassRead
 	case "insert", "update", "delete", "replace", "merge":
 		return ClassWriteData
@@ -53,7 +122,6 @@ func classifyToken(token string) StatementClass {
 		return ClassUnknown
 	}
 }
-
 func RiskLevel(class StatementClass) string {
 	switch class {
 	case ClassAdmin, ClassDDL:
@@ -63,118 +131,4 @@ func RiskLevel(class StatementClass) string {
 	default:
 		return "low"
 	}
-}
-
-func stripComments(sql string) string {
-	var b strings.Builder
-	inLine := false
-	inBlock := false
-	for i := 0; i < len(sql); i++ {
-		if inLine {
-			if sql[i] == '\n' {
-				inLine = false
-				b.WriteByte(sql[i])
-			}
-			continue
-		}
-		if inBlock {
-			if i+1 < len(sql) && sql[i] == '*' && sql[i+1] == '/' {
-				inBlock = false
-				i++
-			}
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '-' && sql[i+1] == '-' {
-			inLine = true
-			i++
-			continue
-		}
-		if i+1 < len(sql) && sql[i] == '/' && sql[i+1] == '*' {
-			inBlock = true
-			i++
-			continue
-		}
-		b.WriteByte(sql[i])
-	}
-	return b.String()
-}
-
-func firstStatement(sql string) string {
-	parts := strings.Split(sql, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			return part
-		}
-	}
-	return ""
-}
-
-func leadingToken(s string) string {
-	for _, token := range strings.Fields(strings.ToLower(s)) {
-		return token
-	}
-	return ""
-}
-
-func classifyWithToken(sql string) string {
-	s := strings.TrimSpace(strings.ToLower(sql))
-	if !strings.HasPrefix(s, "with") {
-		return leadingToken(s)
-	}
-	i := len("with")
-	i = skipSpace(s, i)
-	if strings.HasPrefix(s[i:], "recursive") {
-		i += len("recursive")
-	}
-	for {
-		i = skipSpace(s, i)
-		for i < len(s) && (unicode.IsLetter(rune(s[i])) || unicode.IsDigit(rune(s[i])) || s[i] == '_' || s[i] == '.') {
-			i++
-		}
-		i = skipSpace(s, i)
-		if i < len(s) && s[i] == '(' {
-			i = skipBalanced(s, i)
-		}
-		i = skipSpace(s, i)
-		if !strings.HasPrefix(s[i:], "as") {
-			return "with"
-		}
-		i += len("as")
-		i = skipSpace(s, i)
-		if i >= len(s) || s[i] != '(' {
-			return "with"
-		}
-		i = skipBalanced(s, i)
-		i = skipSpace(s, i)
-		if i >= len(s) || s[i] != ',' {
-			break
-		}
-		i++
-	}
-	i = skipSpace(s, i)
-	return leadingToken(s[i:])
-}
-
-func skipBalanced(s string, start int) int {
-	depth := 0
-	for i := start; i < len(s); i++ {
-		switch s[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i + 1
-			}
-		}
-	}
-	return len(s)
-}
-
-func skipSpace(s string, i int) int {
-	for i < len(s) && unicode.IsSpace(rune(s[i])) {
-		i++
-	}
-	return i
 }

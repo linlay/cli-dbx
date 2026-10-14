@@ -1,8 +1,8 @@
 ---
 name: builtin-dbx
 displayName: 内置数据库工具
-description: "Use this skill to operate the Agent Platform dbx builtin for MySQL, PostgreSQL, or SQLite: discover connection and schema details, run query/update/schema/admin/import/export/tx commands, and diagnose current DBX policy or connection errors."
-version: 0.1.0
+description: "Use this skill to operate the Agent Platform dbx builtin for built-in MySQL/SQLite and separately installed PostgreSQL/Oracle/DM/SQL Server drivers: discover connection and schema details, run query/update/schema/admin/import/export/tx commands, and diagnose current DBX policy or connection errors."
+version: 0.2.0-shared-host.7
 ---
 
 # dbx
@@ -12,6 +12,8 @@ version: 0.1.0
 ## 调用规则
 
 - `dbx` 是 Agent Platform 已注入 `PATH` 的 builtin，可直接执行。
+- 主程序内置 MySQL、SQLite；PostgreSQL、Oracle、达梦和 SQL Server 需另行安装独立驱动包。驱动不从 PATH 查找，也不自动下载。
+- 共享宿主构建可用 `driver_path` 指定同次构建的 `.dbmod`，旁边保留 `.dbmod.json`；宿主或模块不配套时重新安装完整配套包。
 - 直接运行任务所需的 `dbx ...`。不要先执行 `which dbx`、`command -v dbx`、`ls`、PATH 输出、目录扫描或等价探测。
 - 每次 Bash 调用优先只执行一条 DBX 命令，不在前后拼接 `ls`、`which`、`echo`、重定向或 `&&`。
 - Platform 会自动注入 `AP_AGENT_CONFIG_HOME`；DBX 会优先读取当前 agent 的私有 `dbx/` 配置。正常调用不要展开、打印或检查该变量。
@@ -34,6 +36,7 @@ version: 0.1.0
 - 遵守连接的 `allow_actions` 与 `allow_tables`；不得绕过动作分类。
 - 默认单语句；危险写入必须有足够收窄的条件。
 - `tx` 只包含 `query` / `update` step。
+- 写操作失败不自动重试；提交阶段失联时先用只读查询确认最终状态，不能声称一定回滚。
 - 不读取或展示密码、密文、DSN 凭据、系统凭据库内容或 raw config。
 - 正常使用不读取 agent 私有配置目录、`~/.config/dbx/*.toml` 或 SQLite 数据库文件。
 

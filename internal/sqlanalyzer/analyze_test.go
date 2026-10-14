@@ -1,6 +1,10 @@
 package sqlanalyzer
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/linlay/cli-dbx/internal/action"
+)
 
 func TestAnalyzeDetectsObjectsAndUnsafeWrite(t *testing.T) {
 	analysis := Analyze("with doomed as (select * from users) delete from users")
@@ -50,6 +54,67 @@ func TestAnalyzeCollectsWriteAndDDLTargets(t *testing.T) {
 		analysis := Analyze(sql)
 		if len(analysis.Objects) == 0 || analysis.Objects[0] != want {
 			t.Fatalf("%s objects = %#v, want %s", sql, analysis.Objects, want)
+		}
+	}
+}
+
+func TestSelectIntoRequiresSchemaAction(t *testing.T) {
+	for _, sql := range []string{
+		"select id into archived_users from users",
+		"select id into temp table #archived_users from users",
+		"with source as (select id from users) select id into archived_users from source",
+	} {
+		a := Analyze(sql)
+		if a.StatementClass != "ddl" || action.FromClass(a.StatementClass) != action.Schema || !a.NeedsAck {
+			t.Errorf("SELECT INTO = %s, action %s, needs ack %t: %q", a.StatementClass, action.FromClass(a.StatementClass), a.NeedsAck, sql)
+		}
+	}
+}
+
+func TestSQLServerRejectsAdjacentTopLevelStatements(t *testing.T) {
+	for _, sql := range []string{
+		"select 1 as n delete from users",
+		"update users set active = 1 where id = 1 delete from users",
+		"with recent as (select id from users) select id from recent delete from users",
+		"select id from users insert into audit(id) values (1)",
+		"select 1 set @flag = 1",
+		"select 1 if 1=1 delete from users",
+		"update users set active = 1 where id = 1 set @flag = 1",
+		"select 1 /* outer /* inner */ ( */ delete from users",
+		"select 1 -- comment\rdelete from users",
+		"select 1 disable trigger all on users",
+		"select 1 enable trigger all on users",
+		"select 1 kill 52",
+		"select 1 shutdown",
+		"select 1 reconfigure",
+		"select 1 checkpoint",
+		"select 1 deny select on users to guest",
+		"select 1 while 1=1 delete from users",
+	} {
+		a := AnalyzeForEngine("sqlserver", sql)
+		if !a.MultiStatement || a.ValidateSingleStatement() == nil {
+			t.Errorf("accepted adjacent statement: %q: %+v", sql, a)
+		}
+		if standard := Analyze(sql); standard.MultiStatement {
+			t.Errorf("changed baseline parsing for %q", sql)
+		}
+	}
+}
+
+func TestSQLServerAllowsNestedAndQuotedKeywords(t *testing.T) {
+	for _, sql := range []string{
+		"select 'delete from users' as text, [update] from users",
+		"select id from users where id in (select user_id from activity)",
+		"with recent as (select id from users) select id from recent",
+		"insert into archive(id) select id from users",
+		"update users set active = 1 where id = 1",
+		"merge into target using source on target.id = source.id when matched then update set val = source.val when not matched then insert (id) values (source.id)",
+		"select 1 /* outer /* inner */ still comment */ as n",
+		"select 1 -- comment\r\n as n",
+	} {
+		a := AnalyzeForEngine("sqlserver", sql)
+		if a.MultiStatement {
+			t.Errorf("rejected single statement: %q", sql)
 		}
 	}
 }

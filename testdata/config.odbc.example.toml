@@ -1,0 +1,13 @@
+[connection]
+engine = "oracle"
+driver = "odbc"
+# Windows: select .exe; keep the matching .exe.json beside it.
+driver_path = "~/.config/dbx/drivers/dbx-driver-oracle-odbc-0.2.0-driver-process.3"
+# Install the vendor client separately, preserving its required companion files.
+odbc_driver = "/opt/oracle/instantclient/libsqora.dylib.23.1"
+host = "localhost"
+port = 1521
+user = "app"
+database = "FREEPDB1"
+# Fill password with output from dbx secret encrypt.
+allow_actions = ["query"]

@@ -110,7 +110,7 @@ foreach ($t in $targets) {
     }
 
     $archivePath = Join-Path $distDir $archiveName
-    & python (Join-Path $REPO_ROOT "scripts/reproducible-package.py") --stage $packageDir --output $archivePath
+    & python (Join-Path $REPO_ROOT "scripts/reproducible-package.py") --stage $packageDir --output $archivePath --executable $binaryName
     if ($LASTEXITCODE -ne 0) { throw "Deterministic packaging failed" }
 
 }

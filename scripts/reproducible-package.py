@@ -66,11 +66,26 @@ def normalize_sidecar(stage, root, target):
         path.write_bytes(canonical_json(data))
 
 
-def pack(stage, output):
+def pack(stage, output, executables=()):
+    executable_paths = set()
+    for name in executables:
+        value = os.fspath(name)
+        relative = pathlib.PurePosixPath(value.replace('\\', '/'))
+        target = stage.joinpath(*relative.parts)
+        if (not relative.parts or relative.is_absolute() or pathlib.PureWindowsPath(value).drive or
+                '..' in relative.parts or not target.is_file() or
+                any(stage.joinpath(*relative.parts[:i]).is_symlink() for i in range(1, len(relative.parts) + 1))):
+            raise ValueError(f'executable must name a regular file inside the stage: {name}')
+        try:
+            target.resolve().relative_to(stage.resolve())
+        except ValueError:
+            raise ValueError(f'executable must name a regular file inside the stage: {name}') from None
+        executable_paths.add(relative.as_posix())
     output.parent.mkdir(parents=True, exist_ok=True)
     paths = sorted(stage.rglob('*'), key=lambda p: p.relative_to(stage).as_posix())
     def mode(p):
-        if p.is_dir() or p.is_symlink() or p.stat().st_mode & 0o111 or p.suffix == '.exe':
+        if (p.relative_to(stage).as_posix() in executable_paths or p.is_dir() or
+                p.is_symlink() or p.stat().st_mode & 0o111 or p.suffix == '.exe'):
             return 0o755
         return 0o644
     if output.name.endswith('.tar.gz'):
@@ -105,6 +120,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--stage', type=pathlib.Path, required=True)
     parser.add_argument('--output', type=pathlib.Path, required=True)
+    parser.add_argument('--executable', action='append', default=[], metavar='PATH',
+                        help='stage-relative file to package with executable permissions; repeatable')
     parser.add_argument('--sidecar-root', type=pathlib.Path)
     parser.add_argument('--cargo-target', type=pathlib.Path)
     args = parser.parse_args()
@@ -112,7 +129,10 @@ def main():
         if not args.cargo_target:
             parser.error('--cargo-target is required for sidecar metadata')
         normalize_sidecar(args.stage, args.sidecar_root, args.cargo_target)
-    pack(args.stage, args.output)
+    try:
+        pack(args.stage, args.output, args.executable)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == '__main__':

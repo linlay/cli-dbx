@@ -36,7 +36,19 @@ type Envelope struct {
 	Verbose        bool                    `json:"-"`
 }
 
+func ValidateFormat(format string) error {
+	switch strings.ToLower(format) {
+	case "", "json", "table":
+		return nil
+	default:
+		return fmt.Errorf("unsupported output format %q", format)
+	}
+}
+
 func PrintEnvelope(format string, env Envelope) error {
+	if err := ValidateFormat(format); err != nil {
+		return err
+	}
 	switch strings.ToLower(format) {
 	case "", "json":
 		return json.NewEncoder(os.Stdout).Encode(compactPayload(env))

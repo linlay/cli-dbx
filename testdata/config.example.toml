@@ -1,5 +1,9 @@
 [connection]
 engine = "postgres"
+# Install the independent postgres driver before connecting.
+# Select the installed version; the matching .json stays beside this executable.
+# Windows uses a .exe executable and a .exe.json manifest.
+driver_path = "~/.config/dbx/drivers/dbx-driver-postgres-0.2.0-driver-process.3"
 dsn_env = "LOCAL_PG_DSN"
 allow_actions = ["query"]
 # Optional: omit or leave empty to allow all tables.
