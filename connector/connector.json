@@ -2,6 +2,6 @@
   "id": "builtin.dbx",
   "name": "dbx",
   "type": "cli",
-  "auth_mode": null,
+  "authMode": "self",
   "description": "Platform bundled dbx CLI"
 }
