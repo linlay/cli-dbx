@@ -3,5 +3,6 @@
   "name": "dbx",
   "type": "cli",
   "authMode": "self",
-  "description": "Platform bundled dbx CLI"
+  "description": "Platform bundled dbx CLI",
+  "icon": "assets/icon.svg"
 }
