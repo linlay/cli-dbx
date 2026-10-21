@@ -81,6 +81,7 @@ Drivers are verified before launch; no PATH lookup or automatic download.
 
 Config, SQL, transaction JSON, CSV and JSON input files accept UTF-8 with or without BOM.
 SQLite filesystem paths preserve spaces, Unicode, # and literal percent signs.
+Windows Ctrl+Break cancels the current operation; verify interrupted writes before retrying.
 
 It keeps connection management explicit, separates query/update/schema/admin actions,
 and returns results in formats that work well in terminals and scripts.

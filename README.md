@@ -16,7 +16,7 @@
 
 ### 前置要求
 
-- Go 1.26 系列（最低 1.26.6），或直接下载 Release 二进制
+- 普通 CLI、共享宿主与原生模块统一使用 Go 1.26 系列（最低 1.26.6），或直接下载对应 Release 二进制
 - 本地可访问的数据库；MySQL、SQLite 开箱即用
 - PostgreSQL、Oracle、达梦、SQL Server 需先安装与本机平台匹配的[独立驱动包](./docs/driver-process.md)
 
@@ -29,6 +29,8 @@
 - Windows 主进程退出时由系统回收外部驱动进程，即使厂商调用未响应取消；写操作中断后仍须查询确认数据库状态。
 
 共享宿主 Windows ZIP 真库与并发回归见 [测试说明](./docs/shared-host.md#windows-真库回归)，运行 `scripts/test-driver-process-windows.py --shared-host` 与 `scripts/test-shared-host-windows.py`；测试结果写入指定输出目录。
+
+Windows 构建支持源码与临时目录位于不同盘符，无需修改 `TEMP`。运行时可用 Ctrl+Break 取消当前操作；写入中断后先查询确认结果，再决定是否重试。
 
 ### 本地编译
 

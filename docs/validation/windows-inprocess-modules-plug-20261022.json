@@ -1,0 +1,192 @@
+{
+  "date": "2026-10-22",
+  "version": "v0.2.0-shared-host.10",
+  "platform": "windows/amd64",
+  "method": "Physical removal/restoration of module files in an isolated installation; each check launches a new CLI process against a real database.",
+  "results": [
+    {
+      "engine": "postgres",
+      "case": "initial real connection",
+      "status": "pass",
+      "seconds": 0.703
+    },
+    {
+      "engine": "postgres",
+      "case": "initial table row and metadata",
+      "status": "pass",
+      "seconds": 0.547
+    },
+    {
+      "engine": "sqlserver",
+      "case": "initial real connection",
+      "status": "pass",
+      "seconds": 0.296
+    },
+    {
+      "engine": "sqlserver",
+      "case": "initial table row and metadata",
+      "status": "pass",
+      "seconds": 0.953
+    },
+    {
+      "engine": "dm",
+      "case": "initial real connection",
+      "status": "pass",
+      "seconds": 0.234
+    },
+    {
+      "engine": "dm",
+      "case": "initial table row and metadata",
+      "status": "pass",
+      "seconds": 0.469
+    },
+    {
+      "engine": "postgres",
+      "case": "only its own module installed; real table query",
+      "status": "pass",
+      "seconds": 0.766
+    },
+    {
+      "engine": "postgres",
+      "case": "physically removed module rejected",
+      "status": "pass",
+      "seconds": 0.046
+    },
+    {
+      "engine": "sqlserver",
+      "case": "table query while postgres module is absent",
+      "status": "pass",
+      "seconds": 0.282
+    },
+    {
+      "engine": "dm",
+      "case": "table query while postgres module is absent",
+      "status": "pass",
+      "seconds": 0.203
+    },
+    {
+      "engine": "postgres",
+      "case": "restored module; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.562
+    },
+    {
+      "engine": "postgres",
+      "case": "physically removed manifest rejected",
+      "status": "pass",
+      "seconds": 0.047
+    },
+    {
+      "engine": "postgres",
+      "case": "restored manifest; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.563
+    },
+    {
+      "engine": "sqlserver",
+      "case": "only its own module installed; real table query",
+      "status": "pass",
+      "seconds": 0.766
+    },
+    {
+      "engine": "sqlserver",
+      "case": "physically removed module rejected",
+      "status": "pass",
+      "seconds": 0.062
+    },
+    {
+      "engine": "postgres",
+      "case": "table query while sqlserver module is absent",
+      "status": "pass",
+      "seconds": 0.266
+    },
+    {
+      "engine": "dm",
+      "case": "table query while sqlserver module is absent",
+      "status": "pass",
+      "seconds": 0.203
+    },
+    {
+      "engine": "sqlserver",
+      "case": "restored module; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.531
+    },
+    {
+      "engine": "sqlserver",
+      "case": "physically removed manifest rejected",
+      "status": "pass",
+      "seconds": 0.047
+    },
+    {
+      "engine": "sqlserver",
+      "case": "restored manifest; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.562
+    },
+    {
+      "engine": "dm",
+      "case": "only its own module installed; real table query",
+      "status": "pass",
+      "seconds": 0.766
+    },
+    {
+      "engine": "dm",
+      "case": "physically removed module rejected",
+      "status": "pass",
+      "seconds": 0.047
+    },
+    {
+      "engine": "postgres",
+      "case": "table query while dm module is absent",
+      "status": "pass",
+      "seconds": 0.25
+    },
+    {
+      "engine": "sqlserver",
+      "case": "table query while dm module is absent",
+      "status": "pass",
+      "seconds": 0.281
+    },
+    {
+      "engine": "dm",
+      "case": "restored module; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.438
+    },
+    {
+      "engine": "dm",
+      "case": "physically removed manifest rejected",
+      "status": "pass",
+      "seconds": 0.047
+    },
+    {
+      "engine": "dm",
+      "case": "restored manifest; same table row and metadata",
+      "status": "pass",
+      "seconds": 0.437
+    },
+    {
+      "engine": "dm",
+      "case": "cleanup owned test table",
+      "status": "pass",
+      "seconds": 0.25
+    },
+    {
+      "engine": "sqlserver",
+      "case": "cleanup owned test table",
+      "status": "pass",
+      "seconds": 0.282
+    },
+    {
+      "engine": "postgres",
+      "case": "cleanup owned test table",
+      "status": "pass",
+      "seconds": 0.234
+    }
+  ],
+  "tables_cleaned": true,
+  "host_sha256": "e21b48fbcff814d794de02bc81948efc83b7d1cb96e60d6f752b01019eb342fb",
+  "checks": 30,
+  "failed": 0
+}

@@ -39,6 +39,7 @@ Flow:
   AP_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
   Config, SQL, transaction JSON, CSV and JSON files accept UTF-8 with or without BOM.
   SQLite filesystem paths preserve spaces, Unicode, # and literal percent signs.
+  Windows Ctrl+Break cancels the current operation; verify interrupted writes before retrying.
 
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100

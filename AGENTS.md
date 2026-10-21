@@ -26,7 +26,7 @@
 - 驱动：
   - 主程序内置 MySQL：`go-sql-driver/mysql`，SQLite：`modernc.org/sqlite`
   - 独立进程：PostgreSQL、Oracle、达梦、SQL Server，各有 `drivers/<engine>/go.mod`
-  - 构建支持 Go 1.26 系列，Oracle 依赖要求最低 1.26.6。厂商依赖隔离在 `modules/go.mod`；共享构建使用按实际版本区分的私有 SDK `dist/<go-version>-dbmod` 与临时 workspace。宿主和模块必须使用同一具体补丁版本及依赖图，清单和 DBXMOD2 解码仍校验精确 Go 版本与宿主摘要
+  - 普通根模块、共享宿主与原生模块统一使用 Go 1.26 系列，最低 1.26.6；不维护 Go 1.22 兼容路线。厂商依赖隔离在 `modules/go.mod`，Oracle 依赖同样要求最低 1.26.6；共享构建使用按实际版本区分的私有 SDK `dist/<go-version>-dbmod` 与临时 workspace。宿主和模块必须使用同一具体补丁版本及依赖图，清单和 DBXMOD2 解码仍校验精确 Go 版本与宿主摘要
 - 配置格式：TOML
 - 构建与测试：`go build`、`go test`
 - 发布：仓库内 `scripts/release/build.sh`
@@ -293,7 +293,9 @@ go test ./...
 
 ## 共享宿主对象模块契约（实验分支）
 
-当前开发分支为 `codex/dbx-inprocess-modules`，版本 `v0.2.0-shared-host.9`，从 `6081776` 新建。`.9` 将四个原生 `.dbmod` 从隐藏 worker 移到 CLI 主进程；独立可执行驱动和 ODBC 仍走原进程协议。不要继续沿用 `.8` 的模块 worker 架构描述。
+当前开发分支为 `codex/dbx-inprocess-modules`，版本 `v0.2.0-shared-host.10`，从 `6081776` 新建。`.9` 将四个原生 `.dbmod` 从隐藏 worker 移到 CLI 主进程；`.10` 修复 Windows 跨盘 workspace 并补充实际控制台中断验证。普通根模块最低版本保持 Go 1.26.6，与模块工具链要求一致；不得为兼容旧 Go 而将根 `go.mod` 降到 1.22。独立可执行驱动和 ODBC 仍走原进程协议。不要继续沿用 `.8` 的模块 worker 架构描述。
+
+Windows workspace 同盘使用相对路径，跨盘使用 JSON 引用的原生绝对路径。控制台回归在隐藏的独立控制台内，仅向测试 CLI 的新进程组发送 Ctrl+Break，不能广播信号或改变运行测试者的控制台。普通根测试使用 Go 1.26.6 或更新的 1.26 补丁版本；模块与装载器测试使用对应版本的私有 SDK。历史验证记录中的 Go 1.22 测试只描述当时的源码，不作为当前兼容性承诺。
 
 ### 目的与运行边界
 
