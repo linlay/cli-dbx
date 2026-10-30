@@ -9,7 +9,15 @@ def prepare(output):
     root = pathlib.Path(__file__).resolve().parent.parent
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    quote = lambda p: json.dumps(pathlib.Path(os.path.relpath(p.resolve(), output.parent)).as_posix())
+    def quote(path):
+        resolved = path.resolve()
+        try:
+            value = pathlib.Path(os.path.relpath(resolved, output.parent)).as_posix()
+        except ValueError:
+            # Windows has no relative path between different drive letters.
+            # Preserve the native absolute spelling and quote its backslashes.
+            value = str(resolved)
+        return json.dumps(value)
     content = 'go 1.26.6\n\nuse (\n\t' + quote(root) + '\n\t' + quote(root / 'modules') + '\n)\n'
     for module, directory in [('github.com/spf13/cobra', 'cobra'), ('github.com/pkujhd/goloader', 'goloader')]:
         content += '\nreplace ' + module + ' => ' + quote(root / 'third_party' / directory) + '\n'

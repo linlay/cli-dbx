@@ -70,6 +70,12 @@ func TestSharedHostModuleSQLWorkflow(t *testing.T) {
 	if row["id"] != json.Number("9223372036854775807") || row["name"] != "精确整数" || row["payload"] != "AP8=" {
 		t.Fatalf("type fidelity: %v", row)
 	}
+	jsonImport := write("numbers.json", `[{"id":9007199254740993,"name":"JSON 精确整数"}]`)
+	run(true, "import", "file", jsonImport, "fixture", "users")
+	query = run(true, "query", "fixture", "select id from users where id=9007199254740993")
+	if query["data"].(map[string]any)["rows"].([]any)[0].(map[string]any)["id"] != json.Number("9007199254740993") {
+		t.Fatal("raw module import lost integer precision")
+	}
 	plan := write("plan.json", `{"steps":[{"action":"update","sql":"update users set name='已提交' where id=1","max_rows_affected":1},{"action":"query","sql":"select name from users where id=1"}]}`)
 	run(true, "tx", "fixture", "--plan", plan)
 	failed := write("failed.json", `{"steps":[{"action":"update","sql":"update users set name='应回滚' where id=1","max_rows_affected":1},{"action":"update","sql":"insert into missing values(1)"}]}`)
@@ -100,8 +106,48 @@ func TestSharedHostModuleSQLWorkflow(t *testing.T) {
 	if time.Since(start) > 4*time.Second {
 		t.Fatal("module cancellation was not bounded")
 	}
+	configure(module, "'query','update','schema'", "500ms")
+	failedWrite := run(false, "update", "fixture", "insert into imported(id,name) with recursive n(x) as (select 1 union all select x+1 from n) select x,'pending' from n")
+	warnings, _ := json.Marshal(failedWrite["warnings"])
+	if !bytes.Contains(warnings, []byte("verify database state before retrying a write")) {
+		t.Fatalf("write timeout lost outcome warning: %s", warnings)
+	}
 	configure(module, "'query','update','schema'", "10s")
 	run(true, "query", "fixture", "select count(*) from users")
+	query = run(true, "query", "fixture", "select count(*) as n from imported")
+	if query["data"].(map[string]any)["rows"].([]any)[0].(map[string]any)["n"] != json.Number("0") {
+		t.Fatal("canceled fixture write did not roll back")
+	}
+	// Unplug the actual module/manifest pair between CLI invocations.
+	installed := filepath.Join(dir, filepath.Base(module))
+	for _, suffix := range []string{"", ".json"} {
+		content, err := os.ReadFile(module + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(installed+suffix, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configure(installed, "'query'", "10s")
+	run(true, "query", "fixture", "select 1")
+	for _, suffix := range []string{"", ".json"} {
+		if err := os.Rename(installed+suffix, installed+suffix+".disabled"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code := run(false, "query", "fixture", "select 1")["code"]; code != "driver_missing" {
+		t.Fatalf("unplugged module: %v", code)
+	}
+	if err := exec.Command(host, "version").Run(); err != nil {
+		t.Fatalf("host no longer works after unplugging module: %v", err)
+	}
+	for _, suffix := range []string{"", ".json"} {
+		if err := os.Rename(installed+suffix+".disabled", installed+suffix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(true, "query", "fixture", "select 1")
 }
 
 // A loopback peer closes each socket immediately. Observing an accepted socket

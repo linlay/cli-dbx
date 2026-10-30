@@ -151,13 +151,16 @@ func dispatch(ctx context.Context, req Request) (Response, error) {
 	case "relations":
 		r.Relations, err = dbcore.ListRelations(ctx, req.Spec, req.Schema)
 	case "import":
-		rows := make([]map[string]any, 0, len(req.Rows))
-		for _, row := range req.Rows {
-			decoded, e := decodeRow(row)
-			if e != nil {
-				return r, e
+		rows := req.importRows
+		if rows == nil {
+			rows = make([]map[string]any, 0, len(req.Rows))
+			for _, row := range req.Rows {
+				decoded, e := decodeRow(row)
+				if e != nil {
+					return r, e
+				}
+				rows = append(rows, decoded)
 			}
-			rows = append(rows, decoded)
 		}
 		r.Count, err = dbcore.ImportRows(ctx, req.Spec, req.Table, req.Columns, rows, req.MaxRows)
 	default:

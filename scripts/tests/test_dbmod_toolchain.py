@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -84,3 +85,13 @@ class ToolchainTests(unittest.TestCase):
             output = pathlib.Path(directory) / "go.work"
             workspace.prepare(output)
             self.assertTrue(output.read_text().startswith("go 1.26.6\n"))
+
+    def test_workspace_supports_different_windows_drives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "go.work"
+            with patch.object(workspace.os.path, "relpath", side_effect=ValueError("different drives")):
+                workspace.prepare(output)
+            paths = [json.loads(value) for value in re.findall(r'"(?:[^"\\]|\\.)*"', output.read_text())]
+            self.assertEqual(paths, [str(path.resolve()) for path in (
+                ROOT, ROOT / "modules", ROOT / "third_party/cobra", ROOT / "third_party/goloader"
+            )])

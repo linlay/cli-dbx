@@ -12,9 +12,9 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if handled, code := runModuleWorker(ctx, os.Args[1:]); handled {
-		os.Exit(code)
-	}
-
-	os.Exit(app.ExecuteContext(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	args := os.Args[1:]
+	// Vendor connectors may parse the global Go flag set. CLI parsing uses
+	// the saved arguments explicitly; vendor code must not consume them.
+	os.Args = os.Args[:1]
+	os.Exit(app.ExecuteContext(ctx, args, os.Stdin, os.Stdout, os.Stderr))
 }

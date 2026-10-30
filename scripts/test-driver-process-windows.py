@@ -59,6 +59,19 @@ def child_process_handles(parent_pid):
     return kernel, handles
 
 
+def assert_no_driver_children(process, duration=.8):
+    """Observe module operations without starting an independent driver."""
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline and process.poll() is None:
+        kernel, handles = child_process_handles(process.pid)
+        try:
+            assert not handles, 'in-process module unexpectedly spawned a driver child'
+        finally:
+            for handle in handles:
+                kernel.CloseHandle(handle)
+        time.sleep(.02)
+
+
 class Suite:
     def __init__(self, release, output, home, shared=False):
         self.release, self.output, self.home = release.resolve(), output.resolve(), home.resolve()
@@ -371,18 +384,22 @@ class Suite:
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             kernel, handles = None, []
             try:
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline and not handles:
-                    kernel, handles = child_process_handles(parent.pid)
-                    if not handles:
-                        time.sleep(.05)
-                assert len(handles) == 1, 'expected one driver child for database query'
-                time.sleep(.8)  # allow the request to reach the real server
+                if self.shared:
+                    assert_no_driver_children(parent)
+                else:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline and not handles:
+                        kernel, handles = child_process_handles(parent.pid)
+                        if not handles:
+                            time.sleep(.05)
+                    assert len(handles) == 1, 'expected one driver child for database query'
+                    time.sleep(.8)  # allow the request to reach the real server
                 assert parent.poll() is None, 'long database query finished before parent termination'
                 parent.kill()
                 parent.communicate(timeout=3)
-                kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-                assert kernel.WaitForSingleObject(handles[0], 5000) == 0, 'driver survived parent termination'
+                if handles:
+                    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                    assert kernel.WaitForSingleObject(handles[0], 5000) == 0, 'driver survived parent termination'
             finally:
                 if parent.poll() is None:
                     parent.kill()
@@ -392,7 +409,7 @@ class Suite:
                     for handle in handles:
                         kernel.TerminateProcess(handle, 1)  # only this test's held child handles
                         kernel.CloseHandle(handle)
-        self.check(engine, 'parent termination reaps real driver', cancel_parent)
+        self.check(engine, 'terminate in-process CLI without driver children' if self.shared else 'parent termination reaps real driver', cancel_parent)
         self.check(engine, 'connection usable after cancellation', lambda: self.call(['query', parent_name, 'select 1'], config=config))
 
     def metadata_cases(self):

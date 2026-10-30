@@ -1,0 +1,41 @@
+{
+  "date": "2026-10-21",
+  "branch": "codex/dbx-inprocess-modules",
+  "base_commit": "26acc3b71c66b1c2eda63087705bdfc8118cecdf",
+  "source_state": "Validation ran against the .10 working-tree fixes based on base_commit before their commit. Recorded artifacts embed the base commit/time and match their manifests. A later build from committed source must regenerate the host and all paired modules together.",
+  "version": "v0.2.0-shared-host.10",
+  "platform": "windows/amd64",
+  "normal_root_toolchain": "go1.22.12",
+  "shared_toolchain": "go1.26.7",
+  "databases": ["PostgreSQL", "SQL Server", "Dameng", "SQLite"],
+  "baseline": {"version": "v0.2.0-shared-host.9", "checks": 223, "passed": 223, "failed": 0},
+  "release_zip_checks": {"checks": 223, "passed": 223, "failed": 0},
+  "extra_checks": {"checks": 26, "passed": 26, "failed": 0, "readonly_initializations": 150, "concurrent_clis_per_database": 6},
+  "verified": [
+    "Freshly extracted CLI, four native modules and Platform ZIPs; CRC, hashes, module compatibility and binary identity",
+    "Real PostgreSQL, SQL Server and Dameng connections, conn list/show/test and schema/table/connection inspection",
+    "query/update/schema/admin; exact int64/decimal, binary, datetime, NULL, Unicode and pagination",
+    "CSV/JSON import/export, UTF-8 BOM and Windows Unicode/space/#/% file paths",
+    "Transaction commit, SQL-error rollback, affected-row guard and import rollback",
+    "Action/table policy, missing WHERE, multiple statements and action mismatch before module loading",
+    "Only the selected engine module installed, 50 real read-only initializations per external database, no driver children",
+    "Real query timeouts, explicit CLI termination and subsequent reconnection for all three external databases",
+    "Windows -Test build with ordinary C: TEMP and D: repository; no TEMP workaround",
+    "Go accepts a C: workspace referencing the D: repository using native absolute paths",
+    "Real Windows Ctrl+Break in an isolated hidden console cancels a context-ignoring Prepare and returns one sanitized envelope",
+    "Root Go1.22.12 tests; shared root/module/DM fork/loader tests; eight Python cases with one POSIX-only case skipped",
+    "Canonical host verification and byte-identical independent repacks of all four actual vendor modules"
+  ],
+  "fixes": [
+    "Windows cross-drive workspace generation falls back to correctly quoted native absolute paths",
+    "Ordinary root builds retain Go1.22; shared module toolchain remains separate",
+    "CLI and connector skill version synchronized to .10; Windows cancellation help and regression coverage added"
+  ],
+  "limits": [
+    "No local Oracle server was installed; Oracle module initialization/TCP checks do not establish live Oracle compatibility",
+    "MySQL live tests and vendor ODBC routes were not exercised",
+    "macOS, Linux and Windows ARM64 were not run",
+    "The Windows console test sends targeted Ctrl+Break; it does not automate a physical Ctrl+C keystroke",
+    "No latency comparison or RSS measurements; Go internal ABI and exact-host pairing constraints remain"
+  ]
+}

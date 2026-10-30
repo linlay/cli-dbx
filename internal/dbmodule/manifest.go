@@ -1,5 +1,5 @@
 // Package dbmodule validates independently distributed Go object modules.
-// Modules are trusted current-user code, executed in a disposable worker.
+// Modules are trusted current-user code, executed in the CLI process.
 package dbmodule
 
 import (
@@ -49,7 +49,7 @@ func Digest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Verify returns the exact bytes whose digest was checked. The worker loads
+// Verify returns the exact bytes whose digest was checked. The CLI loads
 // these bytes instead of reopening a path after validation.
 func Verify(path, engine, host string) (Manifest, []byte, error) {
 	var m Manifest

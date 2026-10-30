@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-15",
+  "branch": "codex/dbx-inprocess-modules",
+  "version": "v0.2.0-shared-host.9",
+  "base_commit": "6081776910b9a2246435e0c7483241ea13c583f7",
+  "source_state": "Uncommitted in-process implementation on base_commit. Host embeds base commit/time. A later commit/signing/rebuild requires regenerating paired modules.",
+  "platform": "darwin/arm64",
+  "toolchain": "go1.26.6",
+  "architecture": "Four native .dbmod files load directly in the CLI process; independent executable and ODBC compatibility still uses processes.",
+  "passed": [
+    "Native scripts/build-shared-host.sh --test including four isolated actual vendor modules reaching accepted localhost TCP sockets",
+    "CLI PID equals fixture Initialize/Prepare PID; inspect schema initializes once and prepares three operations",
+    "Context-ignoring Initialize and Prepare exit within timeout plus grace; SIGINT uses a distinct long deadline and asserts context canceled",
+    "Panic Prepare is sanitized without value/stack exposure",
+    "SQLite fixture: SQL, BOM/Unicode paths, exact int64/blob, CSV/JSON imports, transaction commit/failure rollback, import limit rollback, query cancellation/recovery",
+    "Additional real fixture write timeout retains uncertain-write hint and rolls back; actual module/manifest removal and restore between CLI calls",
+    "Loader R_WEAK far ARM64 trampoline/reservation regressions fail before fix and pass after; existing loader regressions and seven Python checks pass",
+    "DM optional log/stat file failures no longer pollute stdout; regression fails before fix and passes after",
+    "Normal root tests, nested module/DM fork tests and standalone driver checks",
+    "Canonical host/repack byte reproducibility; strict Mac signature and six ZIP CRC/exact payload/hash/decoded-length checks",
+    "Windows amd64 CGO=0 shared-host cross-build; Windows script Python syntax only",
+    "Independent read-only code review: no concrete blockers; interrupt-test false positive fixed"
+  ],
+  "limits": [
+    "Real local DM conn test returns Error6001 network communication failure/EOF. Same-config .8 worker baseline also returns network EOF. New real query/metadata/transaction validation not executed.",
+    "Windows runtime, PowerShell execution and updated Windows real DB scripts were not run; .7 records are historical.",
+    "Oracle/PostgreSQL/SQLServer checks here prove initialization and TCP network entry, not full real DB SQL compatibility.",
+    "Only Go1.26.6 and Mac arm64 executed; no memory/RSS measurement. Module decoded bytes are serialized graph size, not RAM."
+  ],
+  "measurements": {
+    "host_bytes": 12071104,
+    "host_sha256": "778d98f866089aadf0599f218fa0ef2cdb7b1628bddb784903b47eb873c734a2",
+    "modules": {
+      "postgres": {
+        "module_bytes": 1796423,
+        "manifest_bytes": 450,
+        "decoded_bytes": 5908532,
+        "sha256": "a7c131cf0217b649112d5ec8d64f40e2a980598f9ce83fff0b47ef195d634985"
+      },
+      "oracle": {
+        "module_bytes": 1349287,
+        "manifest_bytes": 446,
+        "decoded_bytes": 3751222,
+        "sha256": "9a07564d149c20022ec9edc110c801caea2ff47074f3eb4d22befc9b679fde40"
+      },
+      "dm": {
+        "module_bytes": 2001628,
+        "manifest_bytes": 438,
+        "decoded_bytes": 4966210,
+        "sha256": "78f09a2469f0e37ea007cfe8379a8dc462718fb2e73e214a81d2248417e63fff"
+      },
+      "sqlserver": {
+        "module_bytes": 719102,
+        "manifest_bytes": 452,
+        "decoded_bytes": 1922290,
+        "sha256": "8cc32256d90e48f9484e22256671a8db057d58d47604fa010050e4c724c09961"
+      }
+    },
+    "installed_total_with_manifests": 17939330,
+    "archives": {
+      "builtin.dbx_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 4873622,
+        "sha256": "bc8e86f80e8472136db640e49571a3d125224e17723bb4d2ae9eb19eec21710b"
+      },
+      "dbx-module-dm_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 1994644,
+        "sha256": "25433c4dd1f2815b450fb30fb5ddf131e67dd5fbff59d9bbc01af3a7b7397ea7"
+      },
+      "dbx-module-oracle_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 1344408,
+        "sha256": "b65b4583b17c3db9be0c1556d770137e24539a3192881e7cd59e06af305e88c8"
+      },
+      "dbx-module-postgres_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 1778972,
+        "sha256": "b795c28f16ce95c3a86c68875df3e2baf71295aae56fd8836481b652f8d9d9b6"
+      },
+      "dbx-module-sqlserver_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 646440,
+        "sha256": "6ba92bd3d0b14bafd844871ace9afcd01156b1d252d0f0888fb13abeeaf364d0"
+      },
+      "dbx-shared-host_v0.2.0-shared-host.9_darwin_arm64.zip": {
+        "bytes": 4700696,
+        "sha256": "88831f51491a6f7f81f0b27d277896641e0374920e7161ed270eb287f86574c3"
+      }
+    }
+  },
+  "real_dm_attempt": {
+    "platform": "darwin/arm64",
+    "version": "v0.2.0-shared-host.9",
+    "status": "not_passed",
+    "operation": "conn test with existing local DM config",
+    "new_error": "Error 6001: network communication failure / EOF",
+    "baseline_worker_version": ".8",
+    "baseline_error": "same network EOF",
+    "not_executed": [
+      "real query",
+      "real metadata",
+      "real transaction"
+    ],
+    "privacy": "Configs, endpoints, credentials and raw database output excluded."
+  }
+}

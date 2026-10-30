@@ -26,7 +26,7 @@
 - 驱动：
   - 主程序内置 MySQL：`go-sql-driver/mysql`，SQLite：`modernc.org/sqlite`
   - 独立进程：PostgreSQL、Oracle、达梦、SQL Server，各有 `drivers/<engine>/go.mod`
-  - 构建支持 Go 1.26 系列，Oracle 依赖要求最低 1.26.6。厂商依赖隔离在 `modules/go.mod`；共享构建使用按实际版本区分的私有 SDK `dist/<go-version>-dbmod` 与临时 workspace。宿主和模块必须使用同一具体补丁版本及依赖图，清单和 DBXMOD2 解码仍校验精确 Go 版本与宿主摘要
+  - 普通根模块、共享宿主与原生模块统一使用 Go 1.26 系列，最低 1.26.6；不维护 Go 1.22 兼容路线。厂商依赖隔离在 `modules/go.mod`，Oracle 依赖同样要求最低 1.26.6；共享构建使用按实际版本区分的私有 SDK `dist/<go-version>-dbmod` 与临时 workspace。宿主和模块必须使用同一具体补丁版本及依赖图，清单和 DBXMOD2 解码仍校验精确 Go 版本与宿主摘要
 - 配置格式：TOML
 - 构建与测试：`go build`、`go test`
 - 发布：仓库内 `scripts/release/build.sh`
@@ -54,11 +54,11 @@
 - `internal/sqllex`
   共享引号、注释和括号层级识别；方言语法不确定时拒绝执行。
 - `internal/db`
-  路由 MySQL/SQLite 到内置执行器，四种外部引擎到进程客户端。
+  路由 MySQL/SQLite 到内置执行器；四种外部引擎按 driver_path 选择主进程对象模块或独立驱动进程。
 - `internal/dbcore`
   共享 SQL 执行、元数据、导入与整批事务，不导入厂商驱动。
 - `internal/driverprocess`
-  驱动包校验、私有管道协议、进程取消与回收。
+  对象模块直接调用与生命周期，以及可执行驱动的包校验、私有管道协议、进程取消与回收。
 - `drivers/postgres`、`drivers/oracle`、`drivers/dm`、`drivers/sqlserver`
   独立模块及可执行入口，各自注册对应数据库驱动。
 - `drivers/odbc`
@@ -72,7 +72,7 @@
 2. 连接配置解析为 `conn.Spec`
 3. SQL 被分类为 statement class，再映射到 action
 4. DBX 先做 `allow_actions` 和安全策略校验
-5. 校验通过后才进入数据库执行层；外部引擎此时才校验并启动独立驱动
+5. 校验通过后才进入数据库执行层；外部引擎此时才校验并加载对象模块或启动独立驱动
 
 ## 4. 目录结构
 
@@ -293,122 +293,113 @@ go test ./...
 
 ## 共享宿主对象模块契约（实验分支）
 
-- `internal/dbmodule` 校验格式/API/协议版本、引擎、平台、Go 版本、模块大小与摘要以及宿主文件 SHA-256。清单和模块为普通文件，同次构建配套，拒绝错误绑定；父进程与 worker 均校验。
-- `driver_path` 显式指向 `.dbmod` 时才启用对象模块。默认发现规则继续只查独立可执行驱动；不自动切换实现。ODBC 仍使用独立适配进程。
-- `dbmod` 标签启用 loader，发布宿主同时使用 `dbmod_runtime` 精简符号读取和指令解码依赖；禁止 `-s` 剥离宿主符号表。开发机私有 Go 树只增加 `cmd/objfile`，不修改安装的 Go。供应 loader 固定来源和本地修补记录见 `third_party/goloader/README.dbx.md`。
-- 每次调用执行同一宿主的隐藏 worker，单次仅加载一种引擎。凭据走原私有 stdin 协议，策略先行、事务/整批导入同 worker、取消后回收、不自动重试写入等契约继续适用。禁止在活跃进程中卸载模块或增加常驻跨调用事务。
-- `modules/<engine>` 只保留厂商初始化及可选的 `Prepare(*conn.Spec)`，共享 SQL 执行由宿主提供。构建器只保留宿主缺少的对象代码与重定位数据，压缩后的对象文件就是安装的模块，不是完整驱动程序的下载压缩包。
-- Windows x64 的 `.7` 已完成原生构建、SQL fixture 与 SQLite/PG/SQLServer/DM 真库 ZIP 回归；`.8` 在 macOS ARM64 / Go 1.26.6 完成原生构建、四个真实模块独立加载/TCP 初始化、SQLite fixture SQL 流程与重复打包。用户另报告本机达梦可插拔手工验证可行，具体证据范围见下文。其他 Mac 厂商真库及新版 Windows 仍需对应环境验收。Mac JIT 映射依赖 CGO，宿主签名须先于模块配对。Go 内部 ABI、动态映射和对象格式仍是实验风险，不能宣称通用插件 ABI 或跨工具链/平台复现。
-- 本分支构建只使用 `scripts/build-shared-host.ps1` 或 `.sh`，与原进程发布入口分开。普通构建保留进程模式兼容。真实数据库兼容性必须由对应数据库环境验证。
+当前开发分支为 `codex/dbx-inprocess-modules`，版本 `v0.2.0-shared-host.10`，从 `6081776` 新建。`.9` 将四个原生 `.dbmod` 从隐藏 worker 移到 CLI 主进程；`.10` 修复 Windows 跨盘 workspace 并补充实际控制台中断验证。普通根模块最低版本保持 Go 1.26.6，与模块工具链要求一致；不得为兼容旧 Go 而将根 `go.mod` 降到 1.22。独立可执行驱动和 ODBC 仍走原进程协议。不要继续沿用 `.8` 的模块 worker 架构描述。
 
-对象格式版本 2 使用 `internal/dbmodformat` 的 DBXMOD2，保留运行时所需 `OpName`，外层 gzip。禁止丢失代码、GC/PC、类型、初始化和重定位数据；打包器逐个比较实际模块的完整图往返。离线预链接只处理与加载基址无关的重定位，不移动代码或 PC/GC 偏移，不宣称缩减运行内存。构建先验证规范宿主重建，再检查打包期间摘要未变；`-Test` 重打包四个模块并要求字节相同。Apple Silicon 加载期间必须固定 OS 线程以匹配线程 JIT 写保护。
+Windows workspace 同盘使用相对路径，跨盘使用 JSON 引用的原生绝对路径。控制台回归在隐藏的独立控制台内，仅向测试 CLI 的新进程组发送 Ctrl+Break，不能广播信号或改变运行测试者的控制台。普通根测试使用 Go 1.26.6 或更新的 1.26 补丁版本；模块与装载器测试使用对应版本的私有 SDK。历史验证记录中的 Go 1.22 测试只描述当时的源码，不作为当前兼容性承诺。
 
-共享 loader 回归包括比较指令宽度、零大小变量不得覆盖类型描述符，以及 Mac ARM64 接口方法指针先去除 chained-fixup 标记再重定位。私有 SDK 支持只读模块缓存中的官方工具链；不得修改硬链接指向的原始 SDK 文件。动态类型表先校验再按运行时类型字符串排序；父管道关闭不得受厂商阻塞调用拖延。扩展脚本每库执行 50 次真实只读初始化，失败即停止调度，不自动重试。
+### 目的与运行边界
 
-### 方案目的与公共代码归属
+用户需要一份约 12 MiB 的 `dbx`，加上按需提供的 PostgreSQL、Oracle、达梦、SQL Server 增量文件，避免每库重复携带独立 Go 程序的基础代码。主程序仍内置 MySQL、SQLite；四个厂商库隔离在 `modules/go.mod`，不得静态链接到 `cmd/dbx`。
 
-当前开发分支为 `codex/dbx-shared-host`，版本为 `v0.2.0-shared-host.8`。用户的目标是一份约 12 MiB 的主程序，加上按需安装的四种数据库增量文件，避免每个独立驱动程序重复携带约 5 MiB 的基础代码。不要把此前的独立可执行驱动尺寸当成当前对象模块尺寸。
+共享宿主是磁盘上的 `dbx`（Windows 为 `dbx.exe`），没有额外 shared-host 文件或后台服务。宿主携带 Go runtime、CLI、配置/凭据/策略、共享 SQL 执行层、对象装载器，以及兼容独立驱动/ODBC 的协议代码。`.dbmod` 保留宿主无法提供的厂商代码、数据、类型、初始化及重定位；相对偏移目标等仍可能要求公共符号副本，不能承诺与静态内嵌增量逐字节相同。
 
-共享宿主就是磁盘上的 `dbx`（Windows 为 `dbx.exe`），没有另一个名为 shared-host 的运行模块。它携带 Go runtime、CLI、配置/凭据/策略、私有管道协议、共享 SQL 执行层、内置 MySQL/SQLite，以及对象模块加载器。每个 `.dbmod` 保留厂商驱动及其依赖中宿主无法提供的代码、数据、类型、初始化和重定位信息；仍可能包含不能安全复用的公共符号副本，不能承诺每字节都与静态内嵌增量相同。
+这是 Go 对象装载器布局，不是 Go 标准 plugin、通用 .so/DLL ABI、解释器或四个完整程序改后缀。Native 达梦不依赖 unixODBC。终端用户只需宿主和模块文件，不需 Go、Python、SDK 或编译器。
 
-这是借鉴“宿主提供公共能力、扩展按需加载”的布局，使用供应的 Go 对象装载器实现。它不是 Go 标准 `plugin`、通用 `.so`/DLL ABI、解释器或 ODBC 客户端，也不是四个完整独立 Go 程序换了后缀。Native 达梦模块不依赖 unixODBC；旧 ODBC 程序的动态库错误不能据此判断新模块依赖。
+生命周期以“一条 CLI 命令执行完退出”为前提：
 
-“共享”主要减少重复的磁盘文件：多个 terminal 的 CLI 仍有各自的主进程和 worker、堆、GC 与数据库连接，不能据磁盘缩减推断进程内存同比缩减。一个 terminal 使用达梦不妨碍另一个使用 PostgreSQL；无需卸载前者。单个 CLI 命令/事务仍只面向一个连接，不提供跨库事务。
+- 四个原生对象模块直接在当前 CLI 进程运行，不启动 `--dbx-module-worker`，该隐藏入口已删除。
+- 多个 terminal 启动的是互相独立的 CLI；一个使用达梦不影响另一个使用 PostgreSQL，无需卸载其他模块。
+- 同一 CLI 中每个引擎只初始化一次，保持 `Loaded` 引用直到进程退出，不进行热卸载。同一活跃进程不能为已加载引擎切换另一个模块路径/版本。
+- `inspect schema` 依次执行 schemas/tables/relations，复用同一个已加载模块，每次操作仍分别创建和关闭数据库连接；这不是跨调用连接池或事务会话。
+- 模块 globals、后台 goroutine 和映射代码随整个 CLI 退出回收。单个命令仍面向一个连接，不提供跨库事务。
+- 去掉 worker 主要减少重复进程的运行时状态、启动、协议编解码及结果副本。旧 worker 本来执行同一个宿主文件，不能据此宣称磁盘再节省一整份宿主或每库 5 MiB；文件大小以本次构建实测为准。
 
-### 加载与调用过程
+### 加载与执行流程
 
-1. 用户继续使用现有 `conn`、`query`、`inspect`、`update`、`tx` 等命令，不新增面向用户的插件命令。
-2. 配置解析得到 `engine` 和 `driver_path`。`driver` 只接受既有的 `native`/`odbc` 选择，不要写 `driver = "module"`；native 路径以 `.dbmod` 结尾时选择模块路线。
-3. 主进程先做动作/SQL/表策略与凭据解析，验证模块及清单与当前宿主配对，再启动同一个宿主文件的内部 `--dbx-module-worker <path> <engine>` 入口。该入口不供用户手工调用，也不把凭据放进参数。
-4. worker 再次验证并取得已检查摘要的不可变模块字节，解压/解码、动态映射与重定位、注册类型/GC 信息并运行初始化，然后使用原私有管道协议调用 `internal/dbcore`。不得校验后重新打开未验证的模块字节。
-5. 整批导入、事务步骤在同一个 worker 内完成；操作结束或取消后回收 worker。下一条 CLI 命令重新加载所选模块，不存在在活跃进程中安全热卸载的承诺。
+1. 现有 `conn`、`query`、`inspect`、`update`、`tx`、`import`、`export` 命令照常解析参数、连接、凭据和策略；不新增用户侧插件命令。
+2. `driver` 只接受既有 native/odbc 选择。native 的显式 `driver_path` 以 `.dbmod` 结尾才启用对象模块，不添加 `driver = "module"`。默认发现继续只查独立可执行驱动，不从 PATH 搜索、不下载、不自动切换路线。
+3. `internal/db` 进入公共调用边界 `internal/driverprocess.Call`；这里为整个数据库操作建立 timeout，再选择对象模块直接调用或独立进程。包名为兼容历史沿用，不代表 `.dbmod` 仍走进程。
+4. `module.go` 按引擎缓存 `sync.Once` 条目；第一次调用验证清单、平台、精确 Go 版本、宿主摘要及模块摘要，取得不可变字节快照后调用 `dbmodule.Load`。禁止校验后重新打开未验证的模块字节。缓存包含失败状态，避免部分初始化后重复注册驱动。
+5. 装载器解压/解码 DBXMOD2，映射与重定位，注册类型/GC 信息并运行厂商初始化。每次操作再调用可选的 `Prepare(*conn.Spec)`；Oracle 在这里创建 connector。主入口先保存 CLI 参数再清空 `os.Args[1:]`，Cobra 使用保存的显式参数，避免 Oracle 的全局 `flag.Parse()` 消费 DBX 参数。
+6. 直接调用既有 `dispatch` / `dbcore`，查询结果原样返回，不经过内部 stdin/stdout 或 JSON 帧。整批导入使用原始行；CLI 在文件解析阶段已把 json.Number 转成 int64/float64/精确文本，不能丢失此步骤。独立进程仍使用类型标记协议，保持整数、二进制、时间及小数保真。
+7. 对外 envelope、错误脱敏、动作/SQL/表保护留在 CLI。模块普通 panic 转成无 panic 值/堆栈的通用错误；runtime fatal、不可恢复信号、其他后台 goroutine 的 panic 仍可能结束整个 CLI。可选达梦日志/统计文件创建失败不得直接打印到 stdout。
+
+### 取消、事务及故障处理
+
+每个模块操作运行在有界等待的调用 goroutine 中；主调用方独立监听 context。操作 timeout 包括校验、加载、Initialize、Prepare、Open 和 SQL 执行。取消后最多等待 200ms 允许正常 rollback/Close，随后返回取消错误，CLI 输出错误并退出整个进程；不会等待忽略 context 的厂商调用无限阻塞。Ctrl+C 使用相同路径。加载后、Prepare 后均检查 context，避免已取消请求继续进入 SQL 分发。
+
+这不是“终止某个 Go goroutine”，也不支持将该返回行为当作长驻服务的安全复用契约。库调用方若取消后仍保留进程，厂商 goroutine 可能继续运行；必须遵守 single-shot 退出边界，不要将同进程嵌入服务/循环任务。多个终端的隔离仍由操作系统进程提供。
+
+事务步骤、整批导入、影响行数保护仍由同一 `dbcore` 连接/事务完成。只在实际 SQL 分发后为写入失败附加“重试前确认数据库状态”；强制退出或提交失联不能保证数据库已经回滚，不自动重试写入。原独立可执行驱动/ODBC 的私有管道、父退出保护和 Windows Job 保留。
 
 ### 代码入口与分层
 
 | 位置 | 职责 |
 | --- | --- |
-| `internal/driverprocess` | 原协议客户端、模块/独立进程路由、启动和取消回收 |
-| `cmd/dbx/worker.go` | 宿主自身的隐藏模块 worker；`worker_disabled.go` 保留普通构建 |
-| `internal/dbmodule` | 清单/宿主绑定验证、模块字节快照、装载及模块入口解析 |
-| `internal/dbmodformat` | 有界 DBXMOD2 编解码；平台与精确 Go 版本校验 |
-| `cmd/dbmod-pack` | 基于规范宿主构建厂商对象图、去重、预链接、压缩和生成清单 |
-| `modules/go.mod`、`modules/<engine>/module.go` | 四库厂商依赖与注册入口，避免普通根构建链接厂商库 |
-| `modules/postgres/fixture.go` | 仅 `dbmod_testfixture` 使用的 SQLite 替身，不发布 |
-| `third_party/goloader` | 固定来源的 Go 内部对象装载器及本地 ABI/重定位修补 |
-| `scripts/prepare-dbmod-toolchain.py`、`prepare-shared-workspace.py` | 私有 SDK 与统一依赖 workspace |
-| `scripts/build-shared-host.sh`、`.ps1` | 原生构建、规范宿主检查、模块构建、测试和打包 |
-| `scripts/package-shared-host.py` | 宿主/模块独立 ZIP、摘要、安装及解码尺寸记录 |
+| `cmd/dbx/main.go` | signal context、保存 CLI 参数、隔离厂商全局 flag、命令退出 |
+| `internal/db` | 内置数据库与可选模块/进程的统一路由 |
+| `internal/driverprocess/client.go` | timeout、模块/进程选择、写入不确定提示、原始导入行 |
+| `internal/driverprocess/module.go`、`module_disabled.go` | dbmod 构建的 load-once/Prepare/直接执行/有界取消；普通构建拒绝对象模块 |
+| `internal/driverprocess/server.go` | 共享操作 dispatch；仅独立驱动调用 Serve 和协议编解码 |
+| `internal/dbcore` | 公共 SQL、元数据、整批导入与事务，不导入厂商驱动 |
+| `internal/dbmodule`、`internal/dbmodformat` | 清单与宿主绑定、字节快照、装载、DBXMOD2 有界编解码 |
+| `modules/go.mod`、`modules/<engine>/module.go` | 四库厂商依赖、注册及可选 Prepare |
+| `modules/postgres/fixture.go` | 仅 dbmod_testfixture：SQLite、PID/次数跟踪、阻塞/panic 替身，不发布 |
+| `cmd/dbmod-pack`、`third_party/goloader` | 对象图构建、宿主去重、保守预链接及供应装载器 |
+| `scripts/build-shared-host.sh`、`.ps1` | 原生宿主、规范重建、四模块、测试和组件打包 |
+| `scripts/test-*-windows.py` | 真库 ZIP 回归；共享路线检查无驱动子进程，进程路线仍检查子进程回收 |
 
-### 安装布局与可插拔验收
+### 安装与插拔
 
-以 `.8` 的达梦为例，安装目录可只包含：
-
-```text
-dbx                            # Windows: dbx.exe
-dbx-driver-dm-0.2.0-shared-host.8.dbmod
-dbx-driver-dm-0.2.0-shared-host.8.dbmod.json
-dameng-test.toml                # 用户的私有配置，不进 Git/发布包
-```
-
-`.dbmod.json` 必须放在对应模块旁边，`driver_path` 指向 `.dbmod`，不是 JSON 或 ZIP。同目录配置可写：
+目录可只包含 `dbx`、`dbx-driver-dm-0.2.0-shared-host.9.dbmod`、同名加 `.json` 的清单和用户私有 TOML：
 
 ```toml
 [connection]
 engine = "dm"
 driver = "native"
-driver_path = "./dbx-driver-dm-0.2.0-shared-host.8.dbmod"
-# 其余地址、账号、密码及 allow_actions 使用用户已有的私有配置
+driver_path = "./dbx-driver-dm-0.2.0-shared-host.9.dbmod"
+# 地址、账号、密码和 allow_actions 使用用户自己的配置
 ```
 
-路径相对于 TOML 所在目录解析，与终端当前目录无关。模块也可以放在单独目录并使用绝对路径。主程序及模块包解压后即可使用，终端用户不需要 Go、Python、SDK 或编译器。添加 PostgreSQL/Oracle/SQL Server 只需同次构建的对应 `.dbmod` 和 `.json`，以及相应连接配置；四库不用一起安装。
+路径相对于 TOML 所在目录。模块可放在专用目录或用绝对路径；`.dbmod.json` 必须紧邻模块，driver_path 指向模块本身。新增其他库只需同次构建的对应模块与清单，不用安装全部四库。拔掉模块后，下一次相应连接命令失败，宿主 version/help 和其他数据库仍能运行；恢复两个文件后即可连接。使用 `./dbx`（Windows `.\dbx.exe`）避免误调用 PATH 中旧版。
 
-可在独立测试目录验证，使用 `./dbx`（Windows 使用 `.\dbx.exe`），避免误调用 PATH 中旧版：
+### 构建、配对与装载器约束
 
-```bash
-./dbx version
-./dbx conn test dameng-test --config ./dameng-test.toml
-module=dbx-driver-dm-0.2.0-shared-host.8.dbmod
-mv "$module" "$module.disabled"
-./dbx conn test dameng-test --config ./dameng-test.toml  # 预期模块缺失
-./dbx version                                         # 宿主仍能启动
-mv "$module.disabled" "$module"
-./dbx conn test dameng-test --config ./dameng-test.toml  # 恢复连接
-./dbx query dameng-test 'SELECT 1 AS N FROM DUAL' --config ./dameng-test.toml
-```
+- 稳定 Go 1.26 系列、最低 1.26.6（Oracle 要求），拒绝其他 minor、RC/devel/custom；入口设 GOTOOLCHAIN=local。宿主/打包器/模块使用同一完整补丁版本和依赖图。
+- `scripts/prepare-dbmod-toolchain.py` 按实际版本准备忽略目录的私有 SDK；缓存绑定源 SDK 路径及版本。只读模块缓存可硬链接复制，但写私有文件前必须 unlink，不能修改原 SDK。
+- `prepare-shared-workspace.py` 合并 root/modules 依赖图。宿主标签为 dbmod,dbmod_runtime；打包器为 dbmod。普通 go build 不具备模块装载能力；宿主禁止 -s 剥离符号表。
+- Mac Apple Silicon 原生运行 `bash scripts/build-shared-host.sh --test`，CGO/JIT 签名先于模块生成。Windows x64 运行 PowerShell 同名脚本 -Test，CGO=0。其他平台/架构未验收。
+- 顺序固定为宿主 → Mac 签名 → 同参数规范重建逐字节比对 → 打包器 → 四模块 → 测试 → 各组件/Platform ZIP。宿主源码、签名、commit/time 等改变后必须重建配套模块，不得手改清单绕过绑定。
+- 清单仍校验格式 2/API 1/协议 1、引擎、文件名、平台、完整 Go 版本、宿主 SHA-256、模块 SHA-256 和解码尺寸。协议字段为格式兼容保留，不代表对象模块运行时仍经 IPC。模块上限 32MiB、解码上限 128MiB，编解码另有限额。
+- `.dbmod` 本身是 gzip 压缩的 DBXMOD2 安装格式，不是完整驱动程序的下载压缩包。对象图完整往返验证；预链接只处理加载基址无关的重定位，不移动代码或 PC/GC 偏移。不允许删除代码、类型、初始化、重定位或 GC/PC 信息来缩减文件。
+- 保留供应 loader 的零大小符号、CMP 宽度、相对目标、类型表排序、Mac chained-pointer 掩码及 JIT 线程固定修补。`.9` 增补弱调用修补：扩展跳板和 ARM/ARM64 指令选择必须忽略 R_WEAK 标记；否则远 ARM64 弱调用会错误写入 ARM32 指令或覆盖未预留代码。对应两项回归加入两个构建脚本。
+- 平台和精确 Go 内部 ABI 风险不会因移除 worker 消失；这不是通用或跨补丁插件 ABI。四个模块必须跟随新宿主整套重建。
 
-这模拟下一次命令中的插拔，不测试运行中移除文件。实际分发和移除应以模块与清单两个文件为单位。测试目录/凭据只是本机临时资料，不应写成另一台机器上的固定前提。
+### 尺寸和证据口径
 
-### 构建、兼容与升级规则
+安装文件大小以发布目录 measurements.json 为准；`.dbmod` 已压缩，旁边清单仅数百字节。gzip 解压后的序列化字节不等于 RSS，不能据此宣称运行内存或峰值节省量。
 
-- 支持稳定 Go 1.26 系列、最低 1.26.6；该最低值来自 Oracle 依赖。拒绝其他 minor、RC/devel/custom 工具链。构建入口设 `GOTOOLCHAIN=local`，不自动换到另一个补丁版本。
-- 按实际 `GOVERSION` 准备 `dist/<go-version>-dbmod`，缓存身份同时绑定原 SDK 路径与完整版本；不同补丁不得混用缓存。只读模块缓存中的 SDK 可通过硬链接复制，但必须 unlink 后重写私有 `go.mod`/标记文件，绝不能截断或 chmod 原始硬链接文件。
-- 临时 `dist/shared-host.go.work` 合并根模块和 `modules` 的依赖图。普通 `go build ./cmd/dbx` 不带加载器能力；必须使用共享宿主专用脚本生成模块宿主。宿主使用 `dbmod,dbmod_runtime`，打包器使用 `dbmod`；不能给宿主加 `-s`。
-- macOS Apple Silicon 在原机执行 `bash scripts/build-shared-host.sh --test`；Windows x64 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-shared-host.ps1 -Test`。Mac 开启 CGO/JIT 签名，Windows 使用 CGO=0。Linux、Intel Mac、Windows ARM64 未作为本方案支持目标验收。
-- 签名先于规范宿主校验及模块打包。构建顺序是宿主 → Mac 签名 → 同参数规范重建并比对字节 → 打包器 → 四个模块 → 测试 → 独立组件 ZIP 和 Platform ZIP。
-- 产物位于 `dist/<VERSION>/shared-host/`，宿主 ZIP 和四个模块 ZIP 分发独立。Platform ZIP 是同一宿主的另一种分发方式；内部打包器、私有 SDK、fixture、stats 不属于终端用户运行依赖。
-- 清单校验格式/API/协议、引擎、文件名、平台、完整 Go 版本、宿主 SHA-256、模块 SHA-256 和解码尺寸。DBXMOD2 解码另有精确工具链/平台检查；模块上限 32 MiB，解码声明上限 128 MiB，编解码器还约束字段及累计分配。
-- 放宽构建补丁版本不等于允许跨补丁混装。重新编译、重新签名、嵌入不同 commit/time 都可能改变宿主摘要，必须重建配套模块；只更新 VERSION 字符串或清单摘要不能产生 ABI 兼容性。
-- 本机验证产物是在提交前构建，嵌入当时的 base commit。另一台机器在新 commit 上发布时应完整重建，不能把新宿主配本机旧模块。当前已配对的临时测试目录不会因为 Git 提交本身而失效。
+`.8` 的 Mac ARM64/Go1.26.6 旧 worker 基线：宿主 12,070,816 字节，PostgreSQL 1,792,875、Oracle 1,346,437、达梦 1,997,290、SQL Server 713,978 字节。其验证记录见 [Mac 历史记录](./docs/validation/macos-shared-host-20261014.json)。Windows `.7` 真库记录仍为历史证据，不能当作 `.9` Windows 原生运行已经验证。
 
-### 当前尺寸与验证证据
+2026-10-15 / macOS ARM64 / Go1.26.6 的 `.9` 主进程模块实测如下。安装大小指解压发布 ZIP 后的文件；模块自身仍以 gzip DBXMOD2 存储，解码大小不是 RSS。
 
-以下为 `.8` / macOS ARM64 / Go 1.26.6 提交前构建的实测字节，完整哈希和归档尺寸见 [Mac 验证记录](./docs/validation/macos-shared-host-20261014.json)：
+| 文件 | 安装文件字节 | MiB | gzip 解码后的序列化字节 | 相比 .8 的字节变化 |
+| --- | ---: | ---: | ---: | ---: |
+| dbx | 12,071,104 | 11.51 | 不适用 | +288 |
+| PostgreSQL | 1,796,423 | 1.71 | 5,908,532 | +3,548 |
+| Oracle | 1,349,287 | 1.29 | 3,751,222 | +2,850 |
+| 达梦 | 2,001,628 | 1.91 | 4,966,210 | +4,338 |
+| SQL Server | 719,102 | 0.69 | 1,922,290 | +5,124 |
 
-| 文件 | 安装文件字节 | gzip 解压后的序列化字节 |
-| --- | ---: | ---: |
-| dbx | 12,070,816 | 不适用 |
-| PostgreSQL 模块 | 1,792,875 | 5,897,988 |
-| Oracle 模块 | 1,346,437 | 3,738,233 |
-| 达梦模块 | 1,997,290 | 4,955,711 |
-| SQL Server 模块 | 713,978 | 1,912,126 |
+宿主、四模块及四份清单合计 17,939,330 字节（17.11 MiB），不含许可证/操作文档。相对旧版文件总量略增，主要涉及新增直接调用边界和弱调用跳板修复，不能把移除进程误解为必然减少安装文件。
 
-安装文件大小不含旁边数百字节的清单；`.dbmod` 本身就是 gzip 压缩的安装格式，无需用户预先解压。解压后序列化大小不等于运行内存；worker 还要构造对象图和映射代码/数据，未测 RSS，不能给出内存结论。
+验证记录见 [主进程模块 Mac 验证](./docs/validation/macos-inprocess-modules-20261015.json)。完整原生 --test、普通根测试、四个真实模块隔离/TCP 初始化、主 PID/load-once、忽略 context 的初始化/Prepare、Ctrl+C、脱敏 panic、SQLite fixture 类型/JSON 导入/事务/超限和取消回滚、实际模块移除/恢复、loader/Python 回归、签名及重复打包通过。Windows x64 仅交叉编译；更新后的 Windows 脚本仅在 Mac 做语法检查，须原机验收。
 
-2026-10-14 自动验证包括完整原生 `--test`、普通根测试、四个独立驱动子模块检查、DM fork、loader/Python 回归、四模块独立安装与 TCP 初始化、SQLite fixture SQL/事务/回滚/超时、模块重复打包字节一致、签名、ZIP 内容及宿主/模块绑定。Windows `.8` 本次只有交叉编译；Windows `.7` 的真库历史记录见 [Windows 验证记录](./docs/validation/windows-shared-host-20261014.json)，不能直接当作新版 Windows 实测。
+本机已有达梦配置实际连接返回“Error 6001: 网络通信异常 / EOF”；同配置旧 `.8` worker 对照也返回相同网络 EOF。此次真库连接未通过，后续真库查询、元数据与事务未执行，不能沿用旧版用户报告冒充 `.9` 真库通过。私人配置和原始数据库输出不进 Git。模块查询等功能由 fixture 和四库 TCP 初始化分别提供限定范围的证据。
 
-用户随后在本机临时目录使用已有达梦配置报告“验证可行”，确认了本方案的达梦可插拔手工验收；未提供逐命令输出，不能扩大为所有 SQL 功能、压力测试或其余三库 Mac 真库联调已通过。私有配置、数据库地址、密码和临时目录内容不得提交。
+产物是在 `6081776` 基础上的未提交源码构建，宿主嵌入 base commit/time；当前已配对文件可使用，但另一机器提交后重新发布时需完整重建宿主和四模块。
 
-后续维护时至少运行普通根测试及共享构建 `--test`，分别覆盖嵌套模块。若改 loader/编解码器/打包规则，保留规范宿主、完整对象图往返、四模块重打包一致与真实 worker 集成验证；不能只凭编译成功宣布可运行。保留本次 `TestInterfaceMethodPointerUsesMask`，它防止 Mach-O ARM64 接口方法切片指针漏做掩码后在打包阶段崩溃。
+后续维护至少运行普通根测试和共享构建 --test，分别覆盖嵌套模块。共享验收包括四库独立安装/TCP 初始化、真实宿主 PID 与单次 Initialize、同 CLI 多操作复用、忽略 context 的 Initialize/Prepare 取消、Ctrl+C、脱敏 panic、SQLite fixture 的类型/导入/事务/策略，以及规范宿主/模块重复打包。真实数据库兼容性另用相应厂商环境证明，不能用 fixture 或编译代替。
 
 用户安装与验证见 [docs/shared-host.md](./docs/shared-host.md)。
 

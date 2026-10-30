@@ -5,7 +5,6 @@
 package dm
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -91,7 +90,7 @@ func (lw *logWriter) createNewFile() *os.File {
 		if _, err := os.Stat(lw.filePath + fileName); err != nil {
 			logFile, err := os.Create(lw.filePath + fileName)
 			if err != nil {
-				fmt.Println(err)
+				// Optional driver logs must not corrupt the CLI's structured stdout.
 				return nil
 			}
 			return logFile

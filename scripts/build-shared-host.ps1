@@ -65,7 +65,7 @@ try {
         $env:DBX_TEST_SHARED_MODULE = $fixture
         & go test -tags dbmod ./...
         if ($LASTEXITCODE -ne 0) { throw 'Shared host tests failed' }
-        & go test github.com/pkujhd/goloader/link -run 'TestFarCompare|TestZeroSized|TestLinkerConstruction|TestPrelink|TestHostRelative|TestInterfaceMethodPointer' -count=1
+        & go test github.com/pkujhd/goloader/link -run 'TestFarCompare|TestZeroSized|TestLinkerConstruction|TestPrelink|TestHostRelative|TestInterfaceMethodPointer|TestWeakARM64|TestFarWeakARM64' -count=1
         if ($LASTEXITCODE -ne 0) { throw 'Loader regression tests failed' }
         & $python.Source -B -m unittest discover -s scripts/tests
         if ($LASTEXITCODE -ne 0) { throw 'Canonical host regression tests failed' }

@@ -1,5 +1,6 @@
 // Package db routes built-in engines locally and optional engines to verified
-// driver processes. Security policy is checked by the CLI before these calls.
+// object modules or verified driver processes. Security policy is checked by
+// the CLI before these calls.
 package db
 
 import (
@@ -112,15 +113,10 @@ func ImportRows(ctx context.Context, spec conn.Spec, table string, columns []str
 	if !driverprocess.IsExternal(spec.Engine) {
 		return dbcore.ImportRows(ctx, spec, table, columns, rows, limits...)
 	}
-	encoded, err := driverprocess.EncodeRows(rows)
-	if err != nil {
-		return 0, err
-	}
 	maxRows := 0
 	if len(limits) > 0 {
 		maxRows = limits[0]
 	}
-	r, err := driverprocess.Call(ctx, spec, driverprocess.Request{Operation: "import", Table: table, Columns: columns, Rows: encoded, MaxRows: maxRows})
-	return r.Count, err
+	return driverprocess.ImportRows(ctx, spec, table, columns, rows, maxRows)
 }
 func QuoteTable(engine, table string) (string, error) { return dbcore.QuoteTable(engine, table) }

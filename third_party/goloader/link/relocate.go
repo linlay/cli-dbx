@@ -33,7 +33,7 @@ func expandFunc(linker *Linker, objsym *obj.ObjSymbol, symbol *obj.Sym) {
 		if !isMmapInLowAddress(linker.Arch.Name) || isStringTypeName(reloc.SymName) {
 			epilogue := &(objsym.Reloc[i].Epilogue)
 			epilogue.Offset = len(linker.Code) - symbol.Offset
-			switch reloc.Type {
+			switch reloc.Type &^ reloctype.R_WEAK {
 			case reloctype.R_ADDRARM64:
 				epilogue.Size = maxExtraCodeSize_ADDRARM64
 			case reloctype.R_CALLARM64:
@@ -262,6 +262,9 @@ func (linker *Linker) relocatePCREL(symAddr uintptr, loc obj.Reloc, segment *seg
 }
 
 func (linker *Linker) relocateCALLARM(addr uintptr, loc obj.Reloc, segment *segment) {
+	// Weak calls use the same machine instructions and trampoline as ordinary
+	// calls. Keep the flag out of ARM vs ARM64 instruction selection.
+	loc.Type &^= reloctype.R_WEAK
 	byteOrder := linker.Arch.ByteOrder
 	add := loc.Add
 	if loc.Type == reloctype.R_CALLARM {

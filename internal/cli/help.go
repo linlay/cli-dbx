@@ -26,6 +26,7 @@ Drivers:
   MySQL and SQLite are built in.
   PostgreSQL, Oracle, DM, and SQL Server require separately installed drivers.
   Select a versioned executable with connection.driver_path; its manifest is <executable>.json.
+  Shared-host builds load an exact-host .dbmod directly; keep its .dbmod.json beside it.
   Flat unversioned default root: connection.driver_dir > DBX_DRIVER_DIR > ~/.config/dbx/drivers.
   Oracle/DM/SQL Server also support driver = "odbc" with driver_path and odbc_driver.
   Drivers are verified before launch; no PATH lookup or automatic download.
@@ -38,6 +39,7 @@ Flow:
   AP_AGENT_CONFIG_HOME/dbx/<name>.toml takes priority when no --config is given.
   Config, SQL, transaction JSON, CSV and JSON files accept UTF-8 with or without BOM.
   SQLite filesystem paths preserve spaces, Unicode, # and literal percent signs.
+  Windows Ctrl+Break cancels the current operation; verify interrupted writes before retrying.
 
 Example:
   dbx query local-pg 'select * from users order by id' --page-size 100

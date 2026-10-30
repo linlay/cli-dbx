@@ -1,6 +1,5 @@
 """Additional ZIP-only shared module compatibility and lifecycle checks."""
-import argparse, concurrent.futures, ctypes, hashlib, importlib.util, json
-from ctypes import wintypes
+import argparse, concurrent.futures, hashlib, importlib.util, json
 import pathlib, shutil, subprocess, time
 
 ROOT=pathlib.Path(__file__).resolve().parent.parent
@@ -59,7 +58,7 @@ for engine in ['postgres','sqlserver','dm']:
         result=suite.call(['query',engine+'_isolated','select 1 as marker'],config=isolated_config,host=isolated_host)
         assert next(iter(result['data']['rows'][0].values()))==1
     suite.check(engine,'real query with only its own installed module',only_one_module)
-    # Each call is a new host and worker; every result must be a real DB row.
+    # Each call is an independent CLI process; every result must be a real DB row.
     def initialize(index):
         result=suite.call(['query',engine,'select 1 as marker'],config=config)
         assert next(iter(result['data']['rows'][0].values()))==1
@@ -74,7 +73,7 @@ for engine in ['postgres','sqlserver','dm']:
                     futures.remove(future)
                     if scheduled<50:
                         futures.append(pool.submit(initialize,scheduled));scheduled+=1
-    suite.check(engine,'50 real readonly initializations with six concurrent workers',stress)
+    suite.check(engine,'50 real readonly initializations with six concurrent CLIs',stress)
     if suite.results[-1]['status']!='pass':raise SystemExit('Stopped after initialization failure')
 
 slow_queries={
@@ -85,49 +84,27 @@ for engine,sql in slow_queries.items():
     config=suite.configure(engine,credentials[engine],name=engine+'_timeout',timeout='2s')
     def timeout():
         parent=subprocess.Popen([str(suite.host),'query',engine+'_timeout',sql,'--config',str(config)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        kernel,handles=None,[]
         try:
-            deadline=time.monotonic()+1.5
-            while time.monotonic()<deadline and not handles:
-                kernel,handles=unified.child_process_handles(parent.pid)
-                if not handles:time.sleep(.02)
-            started=time.monotonic()
+            unified.assert_no_driver_children(parent)
             out,err=parent.communicate(timeout=6)
             assert parent.returncode!=0,'expensive query unexpectedly completed before timeout'
             result=json.loads(out)
             assert any(term in json.dumps(result).lower() for term in ['timeout','deadline']),result.get('code')
-            assert len(handles)==1,'worker not observed'
-            kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
-            assert kernel.WaitForSingleObject(handles[0],3000)==0,'worker survived timeout'
         finally:
             if parent.poll() is None:parent.kill()
             parent.communicate(timeout=3)
-            if kernel:
-                kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT]
-                for handle in handles:kernel.TerminateProcess(handle,1);kernel.CloseHandle(handle)
-    suite.check(engine,'real expensive query timeout and worker reaped',timeout)
+    suite.check(engine,'real expensive query timeout exits CLI without driver children',timeout)
     config=suite.configure(engine,credentials[engine],name=engine+'_parent',timeout='15s')
     def kill_parent():
         parent=subprocess.Popen([str(suite.host),'query',engine+'_parent',sql,'--config',str(config)],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-        kernel,handles=None,[]
         try:
-            deadline=time.monotonic()+4
-            while time.monotonic()<deadline and not handles:
-                kernel,handles=unified.child_process_handles(parent.pid)
-                if not handles:time.sleep(.02)
-            assert len(handles)==1,'worker not observed'
-            time.sleep(.8)
+            unified.assert_no_driver_children(parent)
             assert parent.poll() is None,'expensive query completed before cancellation'
             parent.kill();parent.communicate(timeout=3)
-            kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
-            assert kernel.WaitForSingleObject(handles[0],5000)==0,'worker survived parent termination'
         finally:
             if parent.poll() is None:parent.kill()
             parent.communicate(timeout=3)
-            if kernel:
-                kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT]
-                for handle in handles:kernel.TerminateProcess(handle,1);kernel.CloseHandle(handle)
-    suite.check(engine,'parent termination reaps real worker',kill_parent)
+    suite.check(engine,'terminate CLI with module loaded and no driver children',kill_parent)
     suite.check(engine,'connection works after cancellation',lambda:suite.call(['query',engine+'_parent','select 1'],config=config))
 
 summary=dict(cases=len(suite.results),failed=sum(r['status']=='fail' for r in suite.results),readonly_calls=150,oracle='not tested: no instance',macOS='not tested: Windows host only')

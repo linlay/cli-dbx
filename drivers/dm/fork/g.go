@@ -2143,7 +2143,7 @@ func (sf *statFlusher) createNewFile() *os.File {
 		if _, err := os.Stat(sf.filePath + fileName); err != nil {
 			logFile, err := os.Create(sf.filePath + fileName)
 			if err != nil {
-				fmt.Println(err)
+				// Optional driver statistics must not corrupt structured stdout.
 				return nil
 			}
 			return logFile

@@ -26,19 +26,20 @@ type Error struct {
 func (e *Error) Error() string { return e.Message }
 
 type Request struct {
-	Version   int                `json:"version"`
-	Engine    string             `json:"engine"`
-	Operation string             `json:"operation"`
-	Spec      conn.Spec          `json:"connection"`
-	SQL       string             `json:"sql,omitempty"`
-	Offset    int                `json:"offset,omitempty"`
-	Limit     int                `json:"limit,omitempty"`
-	MaxRows   int                `json:"max_rows,omitempty"`
-	Plan      dbcore.TxPlan      `json:"plan,omitempty"`
-	Schema    string             `json:"schema,omitempty"`
-	Table     string             `json:"table,omitempty"`
-	Columns   []string           `json:"columns,omitempty"`
-	Rows      []map[string]Value `json:"rows,omitempty"`
+	Version    int                `json:"version"`
+	Engine     string             `json:"engine"`
+	Operation  string             `json:"operation"`
+	Spec       conn.Spec          `json:"connection"`
+	SQL        string             `json:"sql,omitempty"`
+	Offset     int                `json:"offset,omitempty"`
+	Limit      int                `json:"limit,omitempty"`
+	MaxRows    int                `json:"max_rows,omitempty"`
+	Plan       dbcore.TxPlan      `json:"plan,omitempty"`
+	Schema     string             `json:"schema,omitempty"`
+	Table      string             `json:"table,omitempty"`
+	Columns    []string           `json:"columns,omitempty"`
+	Rows       []map[string]Value `json:"rows,omitempty"`
+	importRows []map[string]any   // In-process only; never serialized to a driver.
 }
 
 type Response struct {

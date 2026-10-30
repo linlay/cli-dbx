@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/linlay/cli-dbx/internal/conn"
 )
 
 func Call(ctx context.Context, spec conn.Spec, req Request) (response Response, callErr error) {
-	dispatched := false
+	var dispatched atomic.Bool
 	defer func() {
-		if callErr != nil && dispatched && (req.Operation == "execute" || req.Operation == "guarded" || req.Operation == "tx" || req.Operation == "import") {
+		if callErr != nil && dispatched.Load() && (req.Operation == "execute" || req.Operation == "guarded" || req.Operation == "tx" || req.Operation == "import") {
 			callErr = fmt.Errorf("%w; verify database state before retrying a write", callErr)
 		}
 	}()
@@ -26,20 +29,28 @@ func Call(ctx context.Context, spec conn.Spec, req Request) (response Response, 
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	path, args, err := launch(spec)
+	// The same typed request can be dispatched directly without transport.
+	req.Version, req.Engine = ProtocolVersion, spec.Engine
+	req.Spec = conn.Spec{Engine: spec.Engine, Driver: spec.Driver, ODBC: spec.ODBC, DSN: spec.DSN, Host: spec.Host, Port: spec.Port, User: spec.User, Database: spec.Database, Schema: spec.Schema, Timeout: timeout}
+	if isModule(spec) {
+		if spec.Driver == "odbc" {
+			return Response{}, &Error{Code: "driver_invalid", Message: "ODBC does not support Go object modules"}
+		}
+		return callModule(ctx, spec, req, &dispatched)
+	}
+	path, err := executable(spec)
 	if err != nil {
 		return Response{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	// Copy only connection fields; policy and key-store details stay in DBX.
-	req.Version, req.Engine = ProtocolVersion, spec.Engine
-	req.Spec = conn.Spec{Engine: spec.Engine, Driver: spec.Driver, ODBC: spec.ODBC, DSN: spec.DSN, Host: spec.Host, Port: spec.Port, User: spec.User, Database: spec.Database, Schema: spec.Schema, Timeout: timeout}
+	// Only connection fields cross the private pipe; policy and key-store
+	// details stay in DBX.
 	if err := ensureWorkerLifetime(); err != nil {
 		return Response{}, &Error{Code: "driver_start_failed", Message: "cannot establish driver process lifetime protection"}
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := exec.CommandContext(ctx, path)
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -65,7 +76,7 @@ func Call(ctx context.Context, spec conn.Spec, req Request) (response Response, 
 		}
 		return Response{}, &Error{Code: "driver_protocol_error", Message: "cannot send request to driver"}
 	}
-	dispatched = true
+	dispatched.Store(true)
 	result, readErr := readResponse(stdout, spec.Engine, req)
 	if readErr != nil {
 		_ = cmd.Process.Kill()
@@ -82,6 +93,26 @@ func Call(ctx context.Context, spec conn.Spec, req Request) (response Response, 
 		return Response{}, &Error{Code: "driver_process_failed", Message: "driver process exited unsuccessfully; verify database state before retrying a write"}
 	}
 	return result, nil
+}
+
+func isModule(spec conn.Spec) bool {
+	return strings.EqualFold(filepath.Ext(spec.DriverPath), ".dbmod")
+}
+
+// ImportRows avoids protocol cell copies for in-process object modules.
+func ImportRows(ctx context.Context, spec conn.Spec, table string, columns []string, rows []map[string]any, maxRows int) (int64, error) {
+	req := Request{Operation: "import", Table: table, Columns: columns, MaxRows: maxRows}
+	if isModule(spec) {
+		req.importRows = rows
+	} else {
+		var err error
+		req.Rows, err = EncodeRows(rows)
+		if err != nil {
+			return 0, err
+		}
+	}
+	result, err := Call(ctx, spec, req)
+	return result.Count, err
 }
 
 func readResponse(r io.Reader, engine string, req Request) (Response, error) {

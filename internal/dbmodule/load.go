@@ -16,7 +16,7 @@ import (
 	"github.com/pkujhd/goloader"
 )
 
-// Loaded owns mapped code until its worker exits. Unloading live driver code is
+// Loaded owns mapped code until the CLI exits. Unloading live driver code is
 // deliberately unsupported: database drivers can retain goroutines and globals.
 type Loaded struct {
 	module     *goloader.CodeModule

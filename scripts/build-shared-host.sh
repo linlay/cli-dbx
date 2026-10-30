@@ -32,7 +32,7 @@ if [[ "$test_run" == true ]]; then
   fixture="$PWD/dist/postgres-sqlite-fixture.dbmod"
   DBX_MODULE_BUILD_TAGS=dbmod,dbmod_testfixture "$packer" --host "$host" --package github.com/linlay/cli-dbx/modules/postgres --out "$fixture"
   DBX_TEST_SHARED_HOST="$host" DBX_TEST_SHARED_MODULE="$fixture" go test -tags dbmod ./...
-  go test github.com/pkujhd/goloader/link -run 'TestFarCompare|TestZeroSized|TestLinkerConstruction|TestPrelink|TestHostRelative|TestInterfaceMethodPointer' -count=1
+  go test github.com/pkujhd/goloader/link -run 'TestFarCompare|TestZeroSized|TestLinkerConstruction|TestPrelink|TestHostRelative|TestInterfaceMethodPointer|TestWeakARM64|TestFarWeakARM64' -count=1
   "$python_bin" -B -m unittest discover -s scripts/tests
   "$python_bin" -B scripts/test-shared-host-repro.py --host "$host" --packer "$packer"
   (cd modules && go test -tags dbmod ./...)

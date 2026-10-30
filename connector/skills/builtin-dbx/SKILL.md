@@ -2,7 +2,7 @@
 name: builtin-dbx
 displayName: 内置数据库工具
 description: "Use this skill to operate the Agent Platform dbx builtin for built-in MySQL/SQLite and separately installed PostgreSQL/Oracle/DM/SQL Server drivers: discover connection and schema details, run query/update/schema/admin/import/export/tx commands, and diagnose current DBX policy or connection errors."
-version: 0.2.0-shared-host.7
+version: 0.2.0-shared-host.10
 ---
 
 # dbx

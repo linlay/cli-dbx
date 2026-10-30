@@ -40,7 +40,7 @@ Windows 默认目录为 `%USERPROFILE%\.config\dbx`。配置使用 UTF-8，可�
 
 Oracle、达梦、SQL Server 支持 `driver = "odbc"`：`driver_path` 选择带 `-odbc-` 的独立程序，`odbc_driver` 指定厂商库，`odbc_options` 仅提供非凭据选项。ODBC 不接受原始 DSN，不允许选项覆盖结构化字段；Windows 需要厂商 DLL 已注册。Mac ODBC 包的运行库也必须完整解压。
 
-共享宿主包支持将 `driver_path` 指向 `dbx-driver-<engine>-0.2.0-shared-host.1.dbmod`，与同目录 `.dbmod.json` 配套安装。模块必须匹配当前宿主的文件摘要；更新宿主后同时安装其配套模块。普通构建不支持模块，默认目录也不自动发现模块。
+共享宿主包支持将 `driver_path` 指向 `dbx-driver-<engine>-<version-without-v>.dbmod`，与同目录 `.dbmod.json` 配套安装。四个原生模块按需加载到 CLI 主进程；模块必须匹配当前宿主的文件摘要，更新宿主后同时安装其配套模块。普通构建不支持模块，默认目录也不自动发现模块。
 
 正常数据库操作不用检查驱动目录；只有驱动加载错误或明确的安装任务才排查。Platform 核心连接器不含外部驱动包。
 
